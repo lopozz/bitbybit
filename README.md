@@ -1,2 +1,3 @@
-# ml-zoo
-Study Implement Understand
+# 🧬 ml-zoo
+
+> **Study • Implement • Learn**  
