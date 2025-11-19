@@ -3,6 +3,26 @@ from torch import nn, Tensor
 from torch.nn import functional as F
 
 class KVCache:
+    """
+    Key/Value (KV) cache for transformer attention layers.
+
+    In a naïve implementation of autoregressive text generation every forward 
+    pass recomputes the attention keys and values for the entire prefix, which 
+    causes the compute cost to grow quadratically with the sequence length. 
+
+    With KV cache instead of recomputing keys and values at every step, the model
+    stores (caches) the key and value projections from previous tokens.
+    Subsequent steps only compute keys/values for the *new* tokens and append
+    them to the cache. During attention, the model can immediately reuse the
+    cached tensors, reducing complexity from O(n²) per step to O(n) and enabling
+    fast generation.
+
+    Following produciton implementtaion principles this class implements
+    pre-allocates a tensor of shape (2, batch_size, num_heads, max_tokens, head_dim)
+    and returns the *sliced* view of cached keys/values up to thecurrent length, 
+    ready to be fed into attention computations.
+
+    """
     def __init__(self, batch_size, num_heads, max_tokens, head_dim):
         self.kv_cache = torch.empty(
             2,
@@ -34,135 +54,82 @@ class KVCache:
         self.cumulative_length = 0
 
 
+class PagedKVCache():
+    """
+    Block-based ("paged") Key/Value (KV) cache for transformer attention layers.
 
-# class PagedHeadAttention(nn.Module):
-#     def __init__(
-#         self,
-#         embed_dim: int,
-#         num_heads: int,
-#         num_blocks: int,
-#         block_size: int,
-#         attn_pdrop: float = 0.2,
-#     ):
-#         super().__init__()
-#         if embed_dim % num_heads:
-#             raise ValueError(
-#                 f"`embed_dim` must be divisible by num_heads (got `embed_dim`: {embed_dim} and `num_heads`:"
-#                 f" {num_heads})."
-#             )
+    A standard KV cache usually stores all keys and values for a sequence in a
+    single contiguous buffer per batch item. This implies an significant waste of 
+    memory.
 
-#         self.head_dim = embed_dim // num_heads
+    Paged KV cache  divides memory into fixed-size blocks (pages). Each sequence 
+    is represented as a list of blocks, and tokens are appended into these blocks 
+    as needed. This frees unused memory for incoming requdsts increasing server 
+    throughput.
 
-#         # Linear projections for key, query, and value
-#         self.Wk = nn.Linear(embed_dim, self.head_dim, bias=False)
-#         self.Wq = nn.Linear(embed_dim, self.head_dim, bias=False)
-#         self.Wv = nn.Linear(embed_dim, self.head_dim, bias=False)
+    Serving as proof of concept, this class demonstrates the core mechanics behind 
+    paged KV caching: a global pool of fixed-size blocks, per-sequence block tables that
+    describe how those blocks are stitched together logically, and a gather
+    step that materializes dense K/V tensors for attention when needed.
+    """
 
-#         self.attn_dropout = nn.Dropout(attn_pdrop)
+    def __init__(self, num_blocks, block_size, num_heads, head_dim):
+        self.block_size = block_size
+        self.num_heads = num_heads
+        self.head_dim = head_dim
+        self.block_table = None #{i: [] for i in range(B)}
+        self.free_blocks = set(range(num_blocks))
+        self.kv_cache = torch.empty((2, num_blocks, block_size, num_heads, head_dim)) # (2, nB, B, nH, H)
 
-#         self.num_blocks = num_blocks
-#         self.block_size = block_size
-#         self.block_table = {i: [] for i in range(batch_size)}
-#         self.free_blocks = set(range(num_blocks))
+    def update(self, k, v):
+        # allocate in blocks
+        batch_size, _, seq_len, _ = k.size()
+        if self.block_table is None:
+            self.block_table = {i: [] for i in range(batch_size)}
 
-#         self.kv_cache = torch.zeros(
-#             (2, num_blocks, block_size, self.head_dim)
-#         )  # (2, P, S, C)
+        for b in range(batch_size):
+            t = 0
+            while t < k.size(2):
+                # If there's a last block with free space, fill that first
+                if self.block_table[b] and self.block_table[b][-1][1] < self.block_size:
+                    block_id, filled = self.block_table[b][-1]
+                else:
+                    # Need a new block
+                    if not self.free_blocks:
+                        raise RuntimeError("No more free blocks. Implement eviction/preemption here.")
+                    block_id = self.free_blocks.pop()
+                    filled = 0
+                    self.block_table[b].append([block_id, 0])  # store mutable [block_id, filled]
 
-#     def forward(self, x: Tensor):
-#         _, seq_len, _ = x.shape
+                take = min(self.block_size - filled, k.size(2) - t)
+                self.kv_cache[0, block_id, filled:filled+take, :, :] = k.contiguous().view(batch_size, seq_len, self.num_heads, self.head_dim)[b, t:t+take, :, :]
+                self.kv_cache[1, block_id, filled:filled+take, :, :] = v.contiguous().view(batch_size, seq_len, self.num_heads, self.head_dim)[b, t:t+take, :, :]
 
-#         q = self.Wq(x)  # (B,T,C)
-#         k = self.Wk(x)  # (B,T,C)
-#         v = self.Wv(x)  # (B,T,C)
+                # Update filled count in block_table
+                self.block_table[b][-1][1] = filled + take
 
-#         self.slot_mapping(x)
-#         self.write_kv_cache(k, v)
+                t += take
 
-#         k_cache, v_cache = self.fetch_kv_cache()
-#         k_cache, v_cache = k_cache[:, :seq_len, :], v_cache[:, :seq_len, :]
+        # 2) GATHER dense K/V for each sequence
+        # Find max length across batch (for padding to common T_total)
+        max_len = max([sum(f for _, f in x) for x in self.block_table.values()])
 
-#         # Scaled dot-product attention scores
-#         scores = q @ k_cache.transpose(-2, -1) * self.head_dim**-0.5  # (B, T, max_k)
+        k_full = k.new_zeros(batch_size, self.num_heads, max_len, self.head_dim)
+        v_full = v.new_zeros(batch_size, self.num_heads, max_len, self.head_dim)
 
-#         # Causal mask
-#         mask = torch.tril(torch.ones(seq_len, seq_len, device=x.device)) == 0
-#         scores = scores.masked_fill(mask, float("-inf"))  # (B, T, T)
+        for b in range(batch_size):
+            cur = 0
+            for block_id, filled in self.block_table[b]:
+                assert filled
+                
+                # kv_cache: (2, num_blocks, block_size, nH, H)
+                # slice: (filled, nH, H) -> permute to (nH, filled, H)
+                k_block = self.kv_cache[0, block_id, :filled]  # (filled, nH, H)
+                v_block = self.kv_cache[1, block_id, :filled]  # (filled, nH, H)
 
-#         # Attention weights and dropout
-#         attn = F.softmax(scores, dim=-1)
-#         attn = self.attn_dropout(attn)
+                k_full[b, :, cur:cur+filled, :] = k_block.permute(1, 0, 2)
+                v_full[b, :, cur:cur+filled, :] = v_block.permute(1, 0, 2)
+                cur += filled
 
-#         # Weighted sum of values
-#         out = attn @ v_cache  # (B, T, C)
-
-#         return out
-
-#     def slot_mapping(self, x):
-#         req_lens = (x != 0).any(dim=-1).sum(dim=1)  # (B,)
-#         for i, req_len in enumerate(req_lens.tolist()):
-#             rem = int(req_len)
-#             # try to fill existing last block first
-#             while rem > 0:
-#                 if len(self.block_table[i]) > 0:
-#                     last_block_id, last_filled = self.block_table[i][-1]
-#                     avail = self.block_size - last_filled
-#                     if avail > 0:
-#                         take = min(avail, rem)
-#                         # update the last tuple in-place (replace it)
-#                         self.block_table[i][-1] = (last_block_id, last_filled + take)
-#                         rem -= take
-#                         continue  # maybe still remaining -> try to fill again
-#                 # need a new block
-#                 if not self.free_blocks:
-#                     raise Exception(
-#                         "No more free blocks. Implement scheduling and preemption."
-#                     )
-#                 block_id = self.free_blocks.pop()
-#                 take = min(self.block_size, rem)
-#                 self.block_table[i].append((block_id, take))
-#                 rem -= take
-
-#     def write_kv_cache(self, k, v):
-#         for req in self.block_table:
-#             for block in self.block_table[req]:
-#                 block_id, num_filled_positions = block
-#                 self.kv_cache[0, block_id, :num_filled_positions, :] = k[
-#                     req, :num_filled_positions, :
-#                 ]
-#                 self.kv_cache[1, block_id, :num_filled_positions, :] = v[
-#                     req, :num_filled_positions, :
-#                 ]
-
-#     def fetch_kv_cache(self):
-#         self.max_used_blocks = max([len(x) for x in self.block_table.values()])
-
-#         for req in self.block_table:
-#             kv_block_cache = [block_id for block_id, _ in self.block_table[req]]  # N
-
-#             paged_cached_K = self.kv_cache[0, kv_block_cache].view(
-#                 len(kv_block_cache) * self.block_size, self.head_dim
-#             )
-#             paged_cached_V = self.kv_cache[1, kv_block_cache].view(
-#                 len(kv_block_cache) * self.block_size, self.head_dim
-#             )
-
-#             pad = torch.empty(
-#                 (
-#                     (self.max_used_blocks - len(kv_block_cache)) * self.block_size,
-#                     self.head_dim,
-#                 )
-#             )
-#             paged_cached_K = torch.cat((paged_cached_K, pad), dim=0)
-#             paged_cached_V = torch.cat((paged_cached_V, pad), dim=0)
-
-#             if req == 0:
-#                 cached_K = paged_cached_K.unsqueeze(0)
-#                 cached_V = paged_cached_V.unsqueeze(0)
-#             else:
-#                 cached_K = torch.cat((cached_K, paged_cached_K.unsqueeze(0)), dim=0)
-#                 cached_V = torch.cat((cached_V, paged_cached_V.unsqueeze(0)), dim=0)
-
-#         return cached_K, cached_V
-
-
+        return k_full, v_full
+    

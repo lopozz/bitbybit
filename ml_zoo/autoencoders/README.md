@@ -8,8 +8,8 @@ An autoencoder is a neural network that is trained to attempt to copy its input 
 If an autoencoder succeeds in simplylearning to set $g(f(x))=x$ everywhere, then it is not especially useful. Instead, autoencoders are designed to be unable to learn to copy perfectly. Usually they are restricted in ways that allow them to copy only approximately, and to copy only input that resembles the training data. Because the model is forced to prioritize which aspects of the input should be copied, it learns useful properties of the data.
 
 
-## References
-1. https://www.deeplearningbook.org/contents/autoencoders.html
+## Resources
+1. [Autoencoders - CH 14](https://www.deeplearningbook.org/contents/autoencoders.html)
 2. [Reproducing Neural Discrete Representation Learning](https://github.com/ritheshkumar95/pytorch-vqvae/blob/master/final_project.pdf)
 3. [Residual Vector Quantization (RVQ) From Scratch](https://www.youtube.com/watch?v=ZnyfaQRQ8GI)
 4. [Vector_Quantized_Variational_AutoEncoders.ipynb](https://github.com/priyammaz/PyTorch-Adventures/blob/main/PyTorch%20for%20Generation/AutoEncoders/Intro%20to%20AutoEncoders/Vector_Quantized_Variational_AutoEncoders.ipynb)

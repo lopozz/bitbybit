@@ -1,3 +1,3 @@
-# 🧬 ml-zoo
+# ml-zoo
 
-> **Study • Implement • Learn**  
+**Study -> Implement -> Learn**  
