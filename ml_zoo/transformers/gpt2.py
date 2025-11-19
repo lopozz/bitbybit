@@ -16,8 +16,9 @@ state of the art in 9 out of the 12 tasks studied. For instance, we achieve abso
 improvements of 8.9% on commonsense reasoning (Stories Cloze Test), 5.7% on
 question answering (RACE), and 1.5% on textual entailment (MultiNLI).
 
+https://cdn.openai.com/research-covers/language-unsupervised/language_understanding_paper.pdf
 
-References:
+Resources:
 1) Karpathy's nanoGPT implementation:
 https://github.com/karpathy/nanoGPT/blob/master/model.py
 2) huggingface/transformers PyTorch implementation:

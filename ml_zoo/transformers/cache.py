@@ -2,13 +2,14 @@ import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
 
+
 class KVCache:
     """
     Key/Value (KV) cache for transformer attention layers.
 
-    In a naïve implementation of autoregressive text generation every forward 
-    pass recomputes the attention keys and values for the entire prefix, which 
-    causes the compute cost to grow quadratically with the sequence length. 
+    In a naïve implementation of autoregressive text generation every forward
+    pass recomputes the attention keys and values for the entire prefix, which
+    causes the compute cost to grow quadratically with the sequence length.
 
     With KV cache instead of recomputing keys and values at every step, the model
     stores (caches) the key and value projections from previous tokens.
@@ -19,10 +20,11 @@ class KVCache:
 
     Following produciton implementtaion principles this class implements
     pre-allocates a tensor of shape (2, batch_size, num_heads, max_tokens, head_dim)
-    and returns the *sliced* view of cached keys/values up to thecurrent length, 
+    and returns the *sliced* view of cached keys/values up to thecurrent length,
     ready to be fed into attention computations.
 
     """
+
     def __init__(self, batch_size, num_heads, max_tokens, head_dim):
         self.kv_cache = torch.empty(
             2,
@@ -54,20 +56,46 @@ class KVCache:
         self.cumulative_length = 0
 
 
-class PagedKVCache():
+"""
+High throughput serving of large language models (LLMs)
+requires batching sufficiently many requests at a time. 
+However, existing systems struggle because the key-value cache
+(KV cache) memory for each request is huge and grows
+and shrinks dynamically. When managed inefficiently, this
+memory can be significantly wasted by fragmentation and
+redundant duplication, limiting the batch size. To address
+this problem, we propose PagedAttention, an attention algorithm 
+inspired by the classical virtual memory and paging 
+techniques in operating systems. On top of it, we build
+vLLM, an LLM serving system that achieves (1) near-zero
+waste in KV cache memory and (2) flexible sharing of KV
+cache within and across requests to further reduce memory 
+usage. Our evaluations show that vLLM improves the
+throughput of popular LLMs by 2-4× with the same level
+of latency compared to the state-of-the-art systems, such
+as FasterTransformer and Orca. The improvement is more
+pronounced with longer sequences, larger models, and more
+complex decoding algorithms. vLLM’s source code is publicly
+available at https://github.com/vllm-project/vllm.
+
+https://arxiv.org/pdf/2309.06180
+"""
+
+
+class PagedKVCache:
     """
     Block-based ("paged") Key/Value (KV) cache for transformer attention layers.
 
     A standard KV cache usually stores all keys and values for a sequence in a
-    single contiguous buffer per batch item. This implies an significant waste of 
+    single contiguous buffer per batch item. This implies an significant waste of
     memory.
 
-    Paged KV cache  divides memory into fixed-size blocks (pages). Each sequence 
-    is represented as a list of blocks, and tokens are appended into these blocks 
-    as needed. This frees unused memory for incoming requdsts increasing server 
+    Paged KV cache  divides memory into fixed-size blocks (pages). Each sequence
+    is represented as a list of blocks, and tokens are appended into these blocks
+    as needed. This frees unused memory for incoming requdsts increasing server
     throughput.
 
-    Serving as proof of concept, this class demonstrates the core mechanics behind 
+    Serving as proof of concept, this class demonstrates the core mechanics behind
     paged KV caching: a global pool of fixed-size blocks, per-sequence block tables that
     describe how those blocks are stitched together logically, and a gather
     step that materializes dense K/V tensors for attention when needed.
@@ -77,9 +105,11 @@ class PagedKVCache():
         self.block_size = block_size
         self.num_heads = num_heads
         self.head_dim = head_dim
-        self.block_table = None #{i: [] for i in range(B)}
+        self.block_table = None  # {i: [] for i in range(B)}
         self.free_blocks = set(range(num_blocks))
-        self.kv_cache = torch.empty((2, num_blocks, block_size, num_heads, head_dim)) # (2, nB, B, nH, H)
+        self.kv_cache = torch.empty(
+            (2, num_blocks, block_size, num_heads, head_dim)
+        )  # (2, nB, B, nH, H)
 
     def update(self, k, v):
         # allocate in blocks
@@ -96,22 +126,33 @@ class PagedKVCache():
                 else:
                     # Need a new block
                     if not self.free_blocks:
-                        raise RuntimeError("No more free blocks. Implement eviction/preemption here.")
+                        raise RuntimeError(
+                            "No more free blocks. Implement eviction/preemption here."
+                        )
                     block_id = self.free_blocks.pop()
                     filled = 0
-                    self.block_table[b].append([block_id, 0])  # store mutable [block_id, filled]
+                    self.block_table[b].append(
+                        [block_id, 0]
+                    )  # store mutable [block_id, filled]
 
                 take = min(self.block_size - filled, k.size(2) - t)
-                self.kv_cache[0, block_id, filled:filled+take, :, :] = k.contiguous().view(batch_size, seq_len, self.num_heads, self.head_dim)[b, t:t+take, :, :]
-                self.kv_cache[1, block_id, filled:filled+take, :, :] = v.contiguous().view(batch_size, seq_len, self.num_heads, self.head_dim)[b, t:t+take, :, :]
+                self.kv_cache[0, block_id, filled : filled + take, :, :] = (
+                    k.contiguous().view(
+                        batch_size, seq_len, self.num_heads, self.head_dim
+                    )[b, t : t + take, :, :]
+                )
+                self.kv_cache[1, block_id, filled : filled + take, :, :] = (
+                    v.contiguous().view(
+                        batch_size, seq_len, self.num_heads, self.head_dim
+                    )[b, t : t + take, :, :]
+                )
 
                 # Update filled count in block_table
                 self.block_table[b][-1][1] = filled + take
 
                 t += take
 
-        # 2) GATHER dense K/V for each sequence
-        # Find max length across batch (for padding to common T_total)
+        # Fetch dense K/V for each sequence
         max_len = max([sum(f for _, f in x) for x in self.block_table.values()])
 
         k_full = k.new_zeros(batch_size, self.num_heads, max_len, self.head_dim)
@@ -121,15 +162,14 @@ class PagedKVCache():
             cur = 0
             for block_id, filled in self.block_table[b]:
                 assert filled
-                
+
                 # kv_cache: (2, num_blocks, block_size, nH, H)
                 # slice: (filled, nH, H) -> permute to (nH, filled, H)
                 k_block = self.kv_cache[0, block_id, :filled]  # (filled, nH, H)
                 v_block = self.kv_cache[1, block_id, :filled]  # (filled, nH, H)
 
-                k_full[b, :, cur:cur+filled, :] = k_block.permute(1, 0, 2)
-                v_full[b, :, cur:cur+filled, :] = v_block.permute(1, 0, 2)
+                k_full[b, :, cur : cur + filled, :] = k_block.permute(1, 0, 2)
+                v_full[b, :, cur : cur + filled, :] = v_block.permute(1, 0, 2)
                 cur += filled
 
         return k_full, v_full
-    
