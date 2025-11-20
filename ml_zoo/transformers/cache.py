@@ -25,30 +25,30 @@ class KVCache:
 
     """
 
-    def __init__(self, batch_size, num_heads, max_tokens, head_dim):
+    def __init__(self, batch_size, max_tokens, num_heads, head_dim):
         self.kv_cache = torch.empty(
             2,
             batch_size,
-            num_heads,
             max_tokens,
+            num_heads,
             head_dim,
         )
         self.max_tokens = max_tokens
         self.cumulative_length = 0
 
     def update(self, k, v):
-        start = self.cumulative_length
-        end = start + k.shape[-2]
+        start = int(self.cumulative_length)
+        end = start + k.size(-3)
         if end > self.max_tokens:
             raise ValueError("KVCache overflow: increase max_tokens")
 
-        self.kv_cache[0, :, :, start:end, :] = k
-        self.kv_cache[1, :, :, start:end, :] = v
+        self.kv_cache[0, :, start:end, :, :] = k
+        self.kv_cache[1, :, start:end, :, :] = v
 
-        self.cumulative_length += k.shape[-2]
+        self.cumulative_length += k.size(-3)
 
-        return self.kv_cache[0, :, :, : self.cumulative_length, :], self.kv_cache[
-            1, :, :, : self.cumulative_length, :
+        return self.kv_cache[0, :, : self.cumulative_length, :, :], self.kv_cache[
+            1, :, : self.cumulative_length, :, :
         ]
 
     def reset(self):

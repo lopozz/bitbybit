@@ -278,18 +278,18 @@ class GPT2MultiHeadAttention(nn.Module):
         k = self.Wk(x).view(batch_size, seq_len, self.num_heads, self.head_dim)
         v = self.Wv(x).view(batch_size, seq_len, self.num_heads, self.head_dim)
 
-        q = q.permute(0, 2, 1, 3)  # (B, nH, T, H)
-        k = k.permute(0, 2, 1, 3)  # (B, nH, T, H)
-        v = v.permute(0, 2, 1, 3)  # (B, nH, T, H)
-
         if self.use_cache:
             if self.kv_cache is None:
                 # Prefill: initialize kv cache
-                self.kv_cache = KVCache(batch_size, self.num_heads, 2048, self.head_dim)
-                k, v = self.kv_cache.update(k, v)  # 2 x (B, nH, T, H)
+                self.kv_cache = KVCache(batch_size, 2048, self.num_heads, self.head_dim)
+                k, v = self.kv_cache.update(k, v)  # 2 x (B, T, nH, H)
             else:
                 # Decoding: add last token
-                k, v = self.kv_cache.update(k[:, :, -1:, :], v[:, :, -1:, :])
+                k, v = self.kv_cache.update(k[:, -1:, :, :], v[:, -1:, :, :])
+
+        q = q.permute(0, 2, 1, 3)  # (B, nH, T, H)
+        k = k.permute(0, 2, 1, 3)  # (B, nH, T, H)
+        v = v.permute(0, 2, 1, 3)  # (B, nH, T, H)
 
         kq = (q @ k.transpose(-2, -1)) / (self.head_dim**0.5)  # (B, nH, T, T)
 
@@ -307,4 +307,5 @@ class GPT2MultiHeadAttention(nn.Module):
         o = o.view(batch_size, seq_len, embed_dim)  # concat heads
         o = self.Wo(o)
         o = self.dropout(o)
+
         return o
