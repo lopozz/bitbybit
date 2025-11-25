@@ -1,5 +1,5 @@
 """
-Neural Discrete Representation Learning (https://arxiv.org/pdf/1711.00937)
+Neural Discrete Representation Learning
 
 Learning useful representations without supervision remains a key challenge in
 machine learning. In this paper, we propose a simple yet powerful generative
@@ -14,6 +14,8 @@ in the VAE framework. Pairing these representations with an autoregressive prior
 the model can generate high quality images, videos, and speech as well as doing
 high quality speaker conversion and unsupervised learning of phonemes, providing
 further evidence of the utility of the learnt representations.
+
+https://arxiv.org/pdf/1711.00937
 """
 
 import tqdm
@@ -32,50 +34,41 @@ class VectorQuantizer(nn.Module):
         self.codebook_dim = codebook_dim
         self.codebook_size = codebook_size
 
-        # self.embedding = nn.Embedding(codebook_size, latent_dim)
         self.codebook = nn.Embedding(codebook_size, codebook_dim)
 
     def forward(self, x):
         batch_size = x.shape[0]
 
-        ### Distance btwn every Latent and Code: (L-C)**2 = (L**2 - 2LC + C**2 ) ###
-
-        # L2: [B, L] -> [B, 1]
-        # l2 = torch.sum(x**2, dim=1, keepdim=True)
-
-        # # C2: [C, L] -> [C]
-        # c2 = torch.sum(self.embedding.weight**2, dim=1).unsqueeze(0)
-
-        # # CL: [B,L]@[L,C] -> [B, C]
-        # cl = x@self.embedding.weight.t()
-
-        # # [B, 1] - 2 * [B, C] + [C] -> [B, C]
-        # distances = l2 - 2*cl + c2
-
+        # Compute euclidean distance with codebook: (x - e)**2
         dist = (
-            x.pow(2).sum(1, keepdim=True)
-            - 2 * x @ self.embedding.weight.t()
-            + self.embedding.weight.pow(2).sum(1, keepdim=True).t()
+            x.pow(2).sum(1, keepdim=True)                           # [B, 1]
+            - 2 * x @ self.codebook.weight.T                        # [B, C] @ [C, Cs] -> [B, Cs]
+            + self.codebook.weight.pow(2).sum(1, keepdim=True).T    # [1, Cs]
         )
 
-        closest = torch.argmin(dist, dim=-1)  # [B, 1]
+        # TODO: is this optimized/clean?
+        # take inspiration from this https://github.com/hubertsiuzdak/snac/blob/main/snac/vq.py
+        ids = torch.argmin(dist, dim=-1)  # [B, 1]
 
-        quantized_latents_idx = torch.zeros(
+        # Create empty quantized latents embedding
+        ids_mx = torch.zeros(
             batch_size, self.codebook_size, device=x.device
-        )  # [B, C]
+        )  # [B, Cs]
 
-        quantized_latents_idx[torch.arange(batch_size), closest] = 1
+        # Place a 1 at the indexes for each sample for the codebook we want
+        ids_mx[torch.arange(batch_size), ids] = 1
 
-        # [B, C] @ [C, L] -> [B, L]
-        quantized_latents = quantized_latents_idx @ self.embedding.weight
+        z_q = ids_mx @ self.codebook.weight # [B, Cs] @ [Cs, C] -> [B, C]
 
-        return quantized_latents
+        return z_q, ids
 
 
 class LinearVectorQuantizedVAE(nn.Module):
     def __init__(self, latent_dim=2, codebook_size=512):
         super().__init__()
 
+        # TODO: check in the paper what is the architectire for images
+        # Ideally the implementtaion should work for both
         self.encoder = nn.Sequential(
             nn.Linear(32 * 32, 128),
             nn.ReLU(),
@@ -86,11 +79,7 @@ class LinearVectorQuantizedVAE(nn.Module):
             nn.Linear(32, latent_dim),
         )
 
-        #########################################################
-        ###  The New Layers Added in from Original VAE Model  ###
         self.vq = VectorQuantizer(codebook_size, latent_dim)
-
-        #########################################################
 
         self.decoder = nn.Sequential(
             nn.Linear(latent_dim, 32),
@@ -109,19 +98,14 @@ class LinearVectorQuantizedVAE(nn.Module):
         return x
 
     def quantize(self, z):
-        #############################################
-        ## Quantize the Latent Space Representation #
 
         codes = self.vq(z)
 
-        ### Compute VQ Loss ###
         codebook_loss = torch.mean((codes - z.detach()) ** 2)
         commitment_loss = torch.mean((codes.detach() - z) ** 2)
 
-        ### Straight Through ###
+        # straight through
         codes = z + (codes - z).detach()
-
-        #############################################
 
         return codes, codebook_loss, commitment_loss
 
@@ -134,18 +118,16 @@ class LinearVectorQuantizedVAE(nn.Module):
     def forward(self, x):
         batch, channels, height, width = x.shape
 
-        ### Flatten Image to Vector ###
+        # Flatten image to vector
         x = x.flatten(1)
 
-        ### Pass Through Encoder ###
         latents = self.forward_enc(x)
 
-        ### Pass Sampled Data Through Decoder ###
         quantized_latents, decoded, codebook_loss, commitment_loss = self.forward_dec(
             latents
         )
 
-        ### Put Decoded Image Back to Original Shape ###
+        # Put decoded image back to original shape ###
         decoded = decoded.reshape(batch, channels, height, width)
 
         return latents, quantized_latents, decoded, codebook_loss, commitment_loss
