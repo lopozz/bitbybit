@@ -113,13 +113,13 @@ class PagedKVCache:
 
     def update(self, k, v):
         # allocate in blocks
-        batch_size, _, seq_len, _ = k.size()
+        batch_size, seq_len, _, _ = k.size()
         if self.block_table is None:
             self.block_table = {i: [] for i in range(batch_size)}
 
         for b in range(batch_size):
             t = 0
-            while t < k.size(2):
+            while t < k.size(1):
                 # If there's a last block with free space, fill that first
                 if self.block_table[b] and self.block_table[b][-1][1] < self.block_size:
                     block_id, filled = self.block_table[b][-1]
@@ -131,21 +131,11 @@ class PagedKVCache:
                         )
                     block_id = self.free_blocks.pop()
                     filled = 0
-                    self.block_table[b].append(
-                        [block_id, 0]
-                    )  # store mutable [block_id, filled]
+                    self.block_table[b].append([block_id, 0])
 
-                take = min(self.block_size - filled, k.size(2) - t)
-                self.kv_cache[0, block_id, filled : filled + take, :, :] = (
-                    k.contiguous().view(
-                        batch_size, seq_len, self.num_heads, self.head_dim
-                    )[b, t : t + take, :, :]
-                )
-                self.kv_cache[1, block_id, filled : filled + take, :, :] = (
-                    v.contiguous().view(
-                        batch_size, seq_len, self.num_heads, self.head_dim
-                    )[b, t : t + take, :, :]
-                )
+                take = min(self.block_size - filled, k.size(1) - t)
+                self.kv_cache[0, block_id, filled:filled+take, :, :] = k.view(batch_size, seq_len, self.num_heads, self.head_dim)[b, t:t+take, :, :]
+                self.kv_cache[1, block_id, filled:filled+take, :, :] = v.view(batch_size, seq_len, self.num_heads, self.head_dim)[b, t:t+take, :, :]
 
                 # Update filled count in block_table
                 self.block_table[b][-1][1] = filled + take
@@ -155,8 +145,8 @@ class PagedKVCache:
         # Fetch dense K/V for each sequence
         max_len = max([sum(f for _, f in x) for x in self.block_table.values()])
 
-        k_full = k.new_zeros(batch_size, self.num_heads, max_len, self.head_dim)
-        v_full = v.new_zeros(batch_size, self.num_heads, max_len, self.head_dim)
+        k_full = k.new_zeros(batch_size, max_len, self.num_heads, self.head_dim)
+        v_full = v.new_zeros(batch_size, max_len, self.num_heads, self.head_dim)
 
         for b in range(batch_size):
             cur = 0
@@ -168,8 +158,8 @@ class PagedKVCache:
                 k_block = self.kv_cache[0, block_id, :filled]  # (filled, nH, H)
                 v_block = self.kv_cache[1, block_id, :filled]  # (filled, nH, H)
 
-                k_full[b, :, cur : cur + filled, :] = k_block.permute(1, 0, 2)
-                v_full[b, :, cur : cur + filled, :] = v_block.permute(1, 0, 2)
+                k_full[b, cur:cur+filled,:, :] = k_block
+                v_full[b,  cur:cur+filled, :, :] = v_block
                 cur += filled
 
         return k_full, v_full

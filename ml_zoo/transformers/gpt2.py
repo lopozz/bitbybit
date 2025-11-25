@@ -274,18 +274,22 @@ class GPT2MultiHeadAttention(nn.Module):
     def forward(self, x):
         batch_size, seq_len, embed_dim = x.shape
 
-        q = self.Wq(x).view(batch_size, seq_len, self.num_heads, self.head_dim)
-        k = self.Wk(x).view(batch_size, seq_len, self.num_heads, self.head_dim)
-        v = self.Wv(x).view(batch_size, seq_len, self.num_heads, self.head_dim)
-
         if self.use_cache:
             if self.kv_cache is None:
-                # Prefill: initialize kv cache
+                # Prefill: full sequence
                 self.kv_cache = KVCache(batch_size, 2048, self.num_heads, self.head_dim)
-                k, v = self.kv_cache.update(k, v)  # 2 x (B, T, nH, H)
             else:
-                # Decoding: add last token
-                k, v = self.kv_cache.update(k[:, -1:, :, :], v[:, -1:, :, :])
+                # Decoding: only last token
+                x = x[:, -1:, :]  # (B, 1, C)
+
+        q = self.Wq(x).view(
+            batch_size, -1, self.num_heads, self.head_dim
+        )  # (B, T, nH, H)
+        k = self.Wk(x).view(batch_size, -1, self.num_heads, self.head_dim)
+        v = self.Wv(x).view(batch_size, -1, self.num_heads, self.head_dim)
+
+        if self.use_cache:
+            k, v = self.kv_cache.update(k, v)  # (B, T_total, nH, H)
 
         q = q.permute(0, 2, 1, 3)  # (B, nH, T, H)
         k = k.permute(0, 2, 1, 3)  # (B, nH, T, H)
@@ -299,13 +303,10 @@ class GPT2MultiHeadAttention(nn.Module):
         kq = kq.masked_fill(mask, float("-inf"))
         att = F.softmax(kq, dim=-1)
 
-        att = self.dropout(att)
-
         o = att @ v
 
         o = o.permute(0, 2, 1, 3).contiguous()  # (B, T, nH, H)
         o = o.view(batch_size, seq_len, embed_dim)  # concat heads
         o = self.Wo(o)
-        o = self.dropout(o)
 
         return o
