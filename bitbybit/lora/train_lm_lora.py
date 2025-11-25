@@ -5,8 +5,8 @@ import tiktoken
 
 from datasets import load_dataset
 
-from ml_zoo.transformers.gpt2 import GPT2
-from ml_zoo.transformers.lora import apply_lora_to_linear_modules
+from bitbybit.transformers.gpt2 import GPT2
+from bitbybit.lora import apply_lora_to_linear_modules
 
 
 # fmt: off
