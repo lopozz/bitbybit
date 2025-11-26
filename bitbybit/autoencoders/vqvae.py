@@ -25,42 +25,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
-
-class VectorQuantizer(nn.Module):
-    # def __init__(self, codebook_size=1024, latent_dim=2):
-    def __init__(self, codebook_size: int = 1024, codebook_dim: int = 2):
-        super().__init__()
-
-        self.codebook_dim = codebook_dim
-        self.codebook_size = codebook_size
-
-        self.codebook = nn.Embedding(codebook_size, codebook_dim)
-
-    def forward(self, x):
-        batch_size = x.shape[0]
-
-        # Compute euclidean distance with codebook: (x - e)**2
-        dist = (
-            x.pow(2).sum(1, keepdim=True)                           # [B, 1]
-            - 2 * x @ self.codebook.weight.T                        # [B, C] @ [C, Cs] -> [B, Cs]
-            + self.codebook.weight.pow(2).sum(1, keepdim=True).T    # [1, Cs]
-        )
-
-        # TODO: is this optimized/clean?
-        # take inspiration from this https://github.com/hubertsiuzdak/snac/blob/main/snac/vq.py
-        ids = torch.argmin(dist, dim=-1)  # [B, 1]
-
-        # Create empty quantized latents embedding
-        ids_mx = torch.zeros(
-            batch_size, self.codebook_size, device=x.device
-        )  # [B, Cs]
-
-        # Place a 1 at the indexes for each sample for the codebook we want
-        ids_mx[torch.arange(batch_size), ids] = 1
-
-        z_q = ids_mx @ self.codebook.weight # [B, Cs] @ [Cs, C] -> [B, C]
-
-        return z_q, ids
+from bitbybit.autoencoders.vq import VectorQuantizer
 
 
 class LinearVectorQuantizedVAE(nn.Module):
