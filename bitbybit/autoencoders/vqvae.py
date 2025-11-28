@@ -34,13 +34,21 @@ class Encoder(nn.Module):
         super().__init__()
 
         # 2x strided conv layers: 4x4, stride 2, 256 channels
-        self.conv1 = nn.Conv2d(in_channels, hidden_dim, kernel_size=4, stride=2, padding=1)
-        self.conv2 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1)
+        self.conv1 = nn.Conv2d(
+            in_channels, hidden_dim, kernel_size=4, stride=2, padding=1
+        )
+        self.conv2 = nn.Conv2d(
+            hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1
+        )
 
         # Residual blocks: ReLU → 3x3 conv → ReLU → 1x1 conv
-        self.res1_conv3 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1)
+        self.res1_conv3 = nn.Conv2d(
+            hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1
+        )
         self.res1_conv1 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=1, stride=1)
-        self.res2_conv3 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1)
+        self.res2_conv3 = nn.Conv2d(
+            hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1
+        )
         self.res2_conv1 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=1, stride=1)
 
     def forward(self, x):
@@ -64,20 +72,29 @@ class Encoder(nn.Module):
 
         return x
 
+
 class Decoder(nn.Module):
     def __init__(self, out_channels=3, hidden_dim=256):
         super().__init__()
 
         # Residual blocks: mirror of the encoder’s ResNet-style blocks
-        self.res1_conv3 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1)
+        self.res1_conv3 = nn.Conv2d(
+            hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1
+        )
         self.res1_conv1 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=1, stride=1)
 
-        self.res2_conv3 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1)
+        self.res2_conv3 = nn.Conv2d(
+            hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1
+        )
         self.res2_conv1 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=1, stride=1)
 
         # 2x upsampling with transposed convs: 4x4, stride 2
-        self.deconv1 = nn.ConvTranspose2d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1)
-        self.deconv2 = nn.ConvTranspose2d(hidden_dim, out_channels, kernel_size=4, stride=2, padding=1)
+        self.deconv1 = nn.ConvTranspose2d(
+            hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1
+        )
+        self.deconv2 = nn.ConvTranspose2d(
+            hidden_dim, out_channels, kernel_size=4, stride=2, padding=1
+        )
 
     def forward(self, x):
         # residual block 1
@@ -99,8 +116,8 @@ class Decoder(nn.Module):
         x = self.deconv1(x)
         x = self.deconv2(x)
 
-
         return x
+
 
 class VQVAE(nn.Module):
     def __init__(self, hidden_dim=2, codebook_size=512):
@@ -116,29 +133,32 @@ class VQVAE(nn.Module):
         batch_size, C, _, _ = x.shape
         z_e = self.enc(x)
         _, _, H_e, W_e = z_e.shape
-        z_e = z_e.permute(0, 2, 3, 1)      # [B, H, W, D]
+        z_e = z_e.permute(0, 2, 3, 1)  # [B, H, W, D]
         z_e = z_e.view(-1, self.hidden_dim)
         z_q, ids = self.vq(z_e)
         z_q = z_q.view(batch_size, H_e, W_e, self.hidden_dim)
         z_q = z_q.permute(0, 3, 1, 2)
-        y = self.dec(z_q); print(y.shape)
+        y = self.dec(z_q)
+        print(y.shape)
 
         return y, z_e, z_q, ids
-    
+
     def forward(self, x):
         batch_size, _, _, _ = x.shape
 
-        z_e = self.enc(x)                        # [B, D, H_e, W_e]
+        z_e = self.enc(x)  # [B, D, H_e, W_e]
         batch_size, self.hidden_dim, H_e, W_e = z_e.shape
 
         # flatten for VQ
         z_flat = z_e.permute(0, 2, 3, 1).view(-1, self.hidden_dim)  # [B*H_e*W_e, D]
-        z_q_flat, ids = self.vq(z_flat)                            # [B*H_e*W_e, D]
+        z_q_flat, ids = self.vq(z_flat)  # [B*H_e*W_e, D]
 
         # back to feature map
-        z_q = z_q_flat.view(batch_size, H_e, W_e, self.hidden_dim).permute(0, 3, 1, 2)  # [B, D, H_e, W_e]
+        z_q = z_q_flat.view(batch_size, H_e, W_e, self.hidden_dim).permute(
+            0, 3, 1, 2
+        )  # [B, D, H_e, W_e]
 
-        y = self.dec(z_q)                                         # [B, 1, H, W]
+        y = self.dec(z_q)  # [B, 1, H, W]
 
         return y, z_e, z_q, ids
 

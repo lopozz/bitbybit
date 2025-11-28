@@ -137,8 +137,12 @@ class PagedKVCache:
                     self.block_table[b].append([block_id, 0])
 
                 take = min(self.block_size - filled, k.size(1) - t)
-                self.kv_cache[0, block_id, filled:filled+take, :, :] = k.view(batch_size, seq_len, self.num_heads, self.head_dim)[b, t:t+take, :, :]
-                self.kv_cache[1, block_id, filled:filled+take, :, :] = v.view(batch_size, seq_len, self.num_heads, self.head_dim)[b, t:t+take, :, :]
+                self.kv_cache[0, block_id, filled : filled + take, :, :] = k.view(
+                    batch_size, seq_len, self.num_heads, self.head_dim
+                )[b, t : t + take, :, :]
+                self.kv_cache[1, block_id, filled : filled + take, :, :] = v.view(
+                    batch_size, seq_len, self.num_heads, self.head_dim
+                )[b, t : t + take, :, :]
 
                 # Update filled count in block_table
                 self.block_table[b][-1][1] = filled + take
@@ -161,8 +165,8 @@ class PagedKVCache:
                 k_block = self.kv_cache[0, block_id, :filled]  # (filled, nH, H)
                 v_block = self.kv_cache[1, block_id, :filled]  # (filled, nH, H)
 
-                k_full[b, cur:cur+filled,:, :] = k_block
-                v_full[b,  cur:cur+filled, :, :] = v_block
+                k_full[b, cur : cur + filled, :, :] = k_block
+                v_full[b, cur : cur + filled, :, :] = v_block
                 cur += filled
 
         return k_full, v_full
