@@ -23,79 +23,124 @@ import torch
 import torch.nn as nn
 
 import torch.optim as optim
-from torch.utils.data import DataLoader
+import torch.nn.functional as F
 
+from torch.utils.data import DataLoader
 from bitbybit.autoencoders.vq import VectorQuantizer
 
 
-class LinearVectorQuantizedVAE(nn.Module):
-    def __init__(self, latent_dim=2, codebook_size=512):
+class Encoder(nn.Module):
+    def __init__(self, in_channels=3, hidden_dim=256):
         super().__init__()
 
-        # TODO: check in the paper what is the architectire for images
-        # Ideally the implementtaion should work for both
-        self.encoder = nn.Sequential(
-            nn.Linear(32 * 32, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Linear(32, latent_dim),
-        )
+        # 2x strided conv layers: 4x4, stride 2, 256 channels
+        self.conv1 = nn.Conv2d(in_channels, hidden_dim, kernel_size=4, stride=2, padding=1)
+        self.conv2 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1)
 
-        self.vq = VectorQuantizer(codebook_size, latent_dim)
+        # Residual blocks: ReLU → 3x3 conv → ReLU → 1x1 conv
+        self.res1_conv3 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1)
+        self.res1_conv1 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=1, stride=1)
+        self.res2_conv3 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1)
+        self.res2_conv1 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=1, stride=1)
 
-        self.decoder = nn.Sequential(
-            nn.Linear(latent_dim, 32),
-            nn.ReLU(),
-            nn.Linear(32, 64),
-            nn.ReLU(),
-            nn.Linear(64, 128),
-            nn.ReLU(),
-            nn.Linear(128, 32 * 32),
-            nn.Sigmoid(),
-        )
+    def forward(self, x):
+        # conv block
+        x = self.conv1(x)
+        x = self.conv2(x)
 
-    def forward_enc(self, x):
-        x = self.encoder(x)
+        # residual block 1
+        out = F.relu(x)
+        out = self.res1_conv3(out)
+        out = F.relu(out)
+        out = self.res1_conv1(out)
+        x = x + out
+
+        # residual block 2
+        out = F.relu(x)
+        out = self.res2_conv3(out)
+        out = F.relu(out)
+        out = self.res2_conv1(out)
+        x = x + out
 
         return x
 
-    def quantize(self, z):
+class Decoder(nn.Module):
+    def __init__(self, out_channels=3, hidden_dim=256):
+        super().__init__()
 
-        codes = self.vq(z)
+        # Residual blocks: mirror of the encoder’s ResNet-style blocks
+        self.res1_conv3 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1)
+        self.res1_conv1 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=1, stride=1)
 
-        codebook_loss = torch.mean((codes - z.detach()) ** 2)
-        commitment_loss = torch.mean((codes.detach() - z) ** 2)
+        self.res2_conv3 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1)
+        self.res2_conv1 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=1, stride=1)
 
-        # straight through
-        codes = z + (codes - z).detach()
-
-        return codes, codebook_loss, commitment_loss
-
-    def forward_dec(self, x):
-        codes, codebook_loss, commitment_loss = self.quantize(x)
-        decoded = self.decoder(codes)
-
-        return codes, decoded, codebook_loss, commitment_loss
+        # 2x upsampling with transposed convs: 4x4, stride 2
+        self.deconv1 = nn.ConvTranspose2d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1)
+        self.deconv2 = nn.ConvTranspose2d(hidden_dim, out_channels, kernel_size=4, stride=2, padding=1)
 
     def forward(self, x):
-        batch, channels, height, width = x.shape
+        # residual block 1
+        out = F.relu(x)
+        out = self.res1_conv3(out)
+        out = F.relu(out)
+        out = self.res1_conv1(out)
+        x = x + out
 
-        # Flatten image to vector
-        x = x.flatten(1)
+        # residual block 2
+        out = F.relu(x)
+        out = self.res2_conv3(out)
+        out = F.relu(out)
+        out = self.res2_conv1(out)
+        x = x + out
 
-        latents = self.forward_enc(x)
+        # upsampling back to image resolution
+        x = F.relu(x)
+        x = self.deconv1(x)
+        x = self.deconv2(x)
 
-        quantized_latents, decoded, codebook_loss, commitment_loss = self.forward_dec(
-            latents
-        )
 
-        # Put decoded image back to original shape ###
-        decoded = decoded.reshape(batch, channels, height, width)
+        return x
 
-        return latents, quantized_latents, decoded, codebook_loss, commitment_loss
+class VQVAE(nn.Module):
+    def __init__(self, hidden_dim=2, codebook_size=512):
+        super().__init__()
+
+        self.hidden_dim = hidden_dim
+
+        self.enc = Encoder(in_channels=1, hidden_dim=hidden_dim)
+        self.vq = VectorQuantizer(codebook_size=codebook_size, codebook_dim=hidden_dim)
+        self.dec = Decoder(out_channels=1, hidden_dim=hidden_dim)
+
+    def forward(self, x):
+        batch_size, C, _, _ = x.shape
+        z_e = self.enc(x)
+        _, _, H_e, W_e = z_e.shape
+        z_e = z_e.permute(0, 2, 3, 1)      # [B, H, W, D]
+        z_e = z_e.view(-1, self.hidden_dim)
+        z_q, ids = self.vq(z_e)
+        z_q = z_q.view(batch_size, H_e, W_e, self.hidden_dim)
+        z_q = z_q.permute(0, 3, 1, 2)
+        y = self.dec(z_q); print(y.shape)
+
+        return y, z_e, z_q, ids
+    
+    def forward(self, x):
+        batch_size, _, _, _ = x.shape
+
+        z_e = self.enc(x)                        # [B, D, H_e, W_e]
+        batch_size, self.hidden_dim, H_e, W_e = z_e.shape
+
+        # flatten for VQ
+        z_flat = z_e.permute(0, 2, 3, 1).view(-1, self.hidden_dim)  # [B*H_e*W_e, D]
+        z_q_flat, ids = self.vq(z_flat)                            # [B*H_e*W_e, D]
+
+        # back to feature map
+        z_q = z_q_flat.view(batch_size, H_e, W_e, self.hidden_dim).permute(0, 3, 1, 2)  # [B, D, H_e, W_e]
+
+        y = self.dec(z_q)                                         # [B, 1, H, W]
+
+        return y, z_e, z_q, ids
 
 
 def VAELoss(x, x_hat, mean, log_var, kl_weight=1, reconstruction_weight=1):
