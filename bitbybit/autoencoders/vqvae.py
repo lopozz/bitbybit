@@ -26,98 +26,61 @@ import torch.optim as optim
 import torch.nn.functional as F
 
 from torch.utils.data import DataLoader
-from bitbybit.autoencoders.vq import VectorQuantizer
-
+from vq import VectorQuantizer
 
 class Encoder(nn.Module):
-    def __init__(self, in_channels=3, hidden_dim=256):
+
+    def __init__(self, in_channels=1, hidden_dim=256, n_layers=6):
         super().__init__()
-
-        # 2x strided conv layers: 4x4, stride 2, 256 channels
-        self.conv1 = nn.Conv2d(
-            in_channels, hidden_dim, kernel_size=4, stride=2, padding=1
-        )
-        self.conv2 = nn.Conv2d(
-            hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1
-        )
-
-        # Residual blocks: ReLU → 3x3 conv → ReLU → 1x1 conv
-        self.res1_conv3 = nn.Conv2d(
-            hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1
-        )
-        self.res1_conv1 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=1, stride=1)
-        self.res2_conv3 = nn.Conv2d(
-            hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1
-        )
-        self.res2_conv1 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=1, stride=1)
+        convs = []
+        for i in range(n_layers):
+            convs.append(
+                nn.Conv1d(
+                    in_channels if i == 0 else hidden_dim,
+                    hidden_dim,
+                    kernel_size=4,
+                    stride=2,
+                    padding=1,
+                )
+            )
+        self.convs = nn.ModuleList(convs)
 
     def forward(self, x):
-        # conv block
-        x = self.conv1(x)
-        x = self.conv2(x)
-
-        # residual block 1
-        out = F.relu(x)
-        out = self.res1_conv3(out)
-        out = F.relu(out)
-        out = self.res1_conv1(out)
-        x = x + out
-
-        # residual block 2
-        out = F.relu(x)
-        out = self.res2_conv3(out)
-        out = F.relu(out)
-        out = self.res2_conv1(out)
-        x = x + out
-
+        # x: [B, C, T]
+        for conv in self.convs:
+            x = conv(x)
+            x = F.relu(x)
+         # x: [B, hidden_dim, T_e]
         return x
 
 
 class Decoder(nn.Module):
-    def __init__(self, out_channels=3, hidden_dim=256):
+
+    def __init__(self, out_channels=1, hidden_dim=256, n_layers=6):
         super().__init__()
+        deconvs = []
+        for i in range(n_layers):
 
-        # Residual blocks: mirror of the encoder’s ResNet-style blocks
-        self.res1_conv3 = nn.Conv2d(
-            hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1
-        )
-        self.res1_conv1 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=1, stride=1)
-
-        self.res2_conv3 = nn.Conv2d(
-            hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1
-        )
-        self.res2_conv1 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=1, stride=1)
-
-        # 2x upsampling with transposed convs: 4x4, stride 2
-        self.deconv1 = nn.ConvTranspose2d(
-            hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1
-        )
-        self.deconv2 = nn.ConvTranspose2d(
-            hidden_dim, out_channels, kernel_size=4, stride=2, padding=1
-        )
+            deconvs.append(
+                nn.ConvTranspose1d(
+                    hidden_dim,
+                    out_channels if i == n_layers - 1 else hidden_dim,
+                    kernel_size=4,
+                    stride=2,
+                    padding=1,
+                    output_padding=0,  # pure ×2 each layer
+                )
+            )
+        self.deconvs = nn.ModuleList(deconvs)
 
     def forward(self, x):
-        # residual block 1
-        out = F.relu(x)
-        out = self.res1_conv3(out)
-        out = F.relu(out)
-        out = self.res1_conv1(out)
-        x = x + out
-
-        # residual block 2
-        out = F.relu(x)
-        out = self.res2_conv3(out)
-        out = F.relu(out)
-        out = self.res2_conv1(out)
-        x = x + out
-
-        # upsampling back to image resolution
-        x = F.relu(x)
-        x = self.deconv1(x)
-        x = self.deconv2(x)
-
+        # x: [B, hidden_dim, T_e]
+        for i, deconv in enumerate(self.deconvs):
+            x = deconv(x)
+            if i < len(self.deconvs) - 1:
+                x = F.relu(x)
+        # x: [B, out_channels, T]
         return x
-
 
 class VQVAE(nn.Module):
     def __init__(self, hidden_dim=2, codebook_size=512):
@@ -130,35 +93,13 @@ class VQVAE(nn.Module):
         self.dec = Decoder(out_channels=1, hidden_dim=hidden_dim)
 
     def forward(self, x):
-        batch_size, C, _, _ = x.shape
-        z_e = self.enc(x)
-        _, _, H_e, W_e = z_e.shape
-        z_e = z_e.permute(0, 2, 3, 1)  # [B, H, W, D]
-        z_e = z_e.view(-1, self.hidden_dim)
+        batch_size, _, _ = x.shape                                  # [B, D, T]
+
+        z_e = self.enc(x)                                           # [B, D, T_e]
+        z_e = z_e.permute(0, 2, 1).reshape(-1, self.hidden_dim)     # [B, T_e, D] -> [B*T_e, D]
         z_q, ids = self.vq(z_e)
-        z_q = z_q.view(batch_size, H_e, W_e, self.hidden_dim)
-        z_q = z_q.permute(0, 3, 1, 2)
-        y = self.dec(z_q)
-        print(y.shape)
-
-        return y, z_e, z_q, ids
-
-    def forward(self, x):
-        batch_size, _, _, _ = x.shape
-
-        z_e = self.enc(x)  # [B, D, H_e, W_e]
-        batch_size, self.hidden_dim, H_e, W_e = z_e.shape
-
-        # flatten for VQ
-        z_flat = z_e.permute(0, 2, 3, 1).view(-1, self.hidden_dim)  # [B*H_e*W_e, D]
-        z_q_flat, ids = self.vq(z_flat)  # [B*H_e*W_e, D]
-
-        # back to feature map
-        z_q = z_q_flat.view(batch_size, H_e, W_e, self.hidden_dim).permute(
-            0, 3, 1, 2
-        )  # [B, D, H_e, W_e]
-
-        y = self.dec(z_q)  # [B, 1, H, W]
+        z_q = z_q.reshape(batch_size, self.hidden_dim, -1)
+        y = self.dec(z_q)                                           # [B, D, T]
 
         return y, z_e, z_q, ids
 

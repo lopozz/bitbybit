@@ -17,6 +17,7 @@ class VectorQuantizer(nn.Module):
             - 2 * x @ self.codebook.weight.T  # [B, C] @ [C, Cs] -> [B, Cs]
             + self.codebook.weight.pow(2).sum(1, keepdim=True).T  # [1, Cs]
         )
+        print(dist.size())
         ids = torch.argmin(dist, dim=-1)  # [B]
         z_q = self.codebook(ids)  # [B, C]
         z_q = (
