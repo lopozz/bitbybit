@@ -12,7 +12,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description=("Pre-train GPT model."))
     parser.add_argument("--block_size", type=int, default=64) #256)
     parser.add_argument("--batch_size", type=int, default=16) #64)
-    parser.add_argument("--learning_rate", type=float, default=3e-4)
+    parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--max_iters", type=int, default=2000)
     parser.add_argument("--eval_iters", type=int, default=200)
     parser.add_argument("--eval_interval", type=int, default=500)
@@ -59,15 +59,15 @@ def main():
     train_samples = 100
     val_samples = 20
 
-    dataset = load_dataset(args.dataset)
+    ds = load_dataset(args.dataset)
     enc = tiktoken.get_encoding("gpt2")
     vocab_size = len(enc._mergeable_ranks)
 
-    text = "RECIPE: " + "\n\nRECIPE: ".join(dataset["train"][:train_samples]["input"])
+    text = "RECIPE: " + "\n\nRECIPE: ".join(ds["train"][:train_samples]["input"])
     train_data = torch.tensor(enc.encode(text), dtype=torch.long)
 
     text = "RECIPE: " + "\n\nRECIPE: ".join(
-        dataset["train"][train_samples : train_samples + val_samples]["input"]
+        ds["train"][train_samples : train_samples + val_samples]["input"]
     )
     val_data = torch.tensor(enc.encode(text), dtype=torch.long)
 
@@ -83,7 +83,7 @@ def main():
     print(sum(p.numel() for p in model.parameters()) / 1e6, "M parameters")
 
     # create a PyTorch optimizer
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
     start = time.time()
 

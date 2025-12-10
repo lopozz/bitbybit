@@ -17,11 +17,10 @@ class VectorQuantizer(nn.Module):
             - 2 * x @ self.codebook.weight.T  # [B, C] @ [C, Cs] -> [B, Cs]
             + self.codebook.weight.pow(2).sum(1, keepdim=True).T  # [1, Cs]
         )
-        print(dist.size())
         ids = torch.argmin(dist, dim=-1)  # [B]
         z_q = self.codebook(ids)  # [B, C]
         z_q = (
             x + (z_q - x).detach()
-        )  # noop in forward pass, straight-through gradient estimator in backward pass
+        )  # straight-through estimator (see https://arxiv.org/pdf/1308.3432)
 
         return z_q, ids
