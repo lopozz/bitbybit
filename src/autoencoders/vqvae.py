@@ -27,9 +27,9 @@ import torch.optim as optim
 import torch.nn.functional as F
 
 from tqdm import tqdm
-# from vq import VectorQuantizer
 from datasets import load_dataset
 from torch.utils.data import DataLoader
+
 
 class VectorQuantizer(nn.Module):
     def __init__(self, codebook_size: int = 1024, codebook_dim: int = 2):
@@ -50,7 +50,7 @@ class VectorQuantizer(nn.Module):
         e_k = self.codebook(ids)  # [B, C]
 
         # straight-through estimator (see https://arxiv.org/pdf/1308.3432)
-        e_k = x + (e_k - x).detach() 
+        e_k = x + (e_k - x).detach()
 
         return e_k, ids
 
@@ -125,9 +125,13 @@ class VQVAE(nn.Module):
 
         self.hidden_dim = hidden_dim
 
-        self.enc = Encoder(in_channels=1, hidden_dim=hidden_dim, n_layers=n_layers, verbose=verbose)
+        self.enc = Encoder(
+            in_channels=1, hidden_dim=hidden_dim, n_layers=n_layers, verbose=verbose
+        )
         self.vq = VectorQuantizer(codebook_size=codebook_size, codebook_dim=hidden_dim)
-        self.dec = Decoder(out_channels=1, hidden_dim=hidden_dim, n_layers=n_layers, verbose=verbose)
+        self.dec = Decoder(
+            out_channels=1, hidden_dim=hidden_dim, n_layers=n_layers, verbose=verbose
+        )
 
     def forward(self, x):
         batch_size, _, _ = x.shape  # [B, D, T]
@@ -155,67 +159,3 @@ def collate_fn(batch):
 
     x = torch.stack(padded, dim=0)  # [B, 1, max_len]
     return x, lengths
-
-
-# fmt: off
-def parse_arguments():
-    parser = argparse.ArgumentParser(description=("Train VQVAE."))
-    parser.add_argument("--batch_size", type=int, default=1)
-    parser.add_argument("--lr", type=float, default=0.005)
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--dataset", type=str, default="MushanW/GLOBE_V2")
-    parser.add_argument("--device", type=str, default="cuda")
-
-    return parser.parse_args()
-# fmt: on
-
-
-def main():
-    args = parse_arguments()
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    ds = load_dataset("audiofolder", data_dir="/home/lpozzi/Git/bitbybit/data/audio")
-
-    trainloader = DataLoader(
-        ds["train"],
-        batch_size=args.batch_size,
-        collate_fn=collate_fn,
-    )
-
-    model = VQVAE(hidden_dim=64, codebook_size=512).to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr)
-
-    for _ in tqdm(range(args.epochs), desc="Training"):
-        for x, lengths in trainloader:
-            _, _, seq_len = x.shape
-            seq_len_pad = ((seq_len + 63) // 64) * 64
-            if seq_len_pad != seq_len:
-                x = F.pad(x, (0, seq_len_pad - seq_len))  # [B, 1, T_pad]
-
-            x = x.to(device)  # [B, 1, T]
-            lengths = lengths.to(device)  # [B]
-
-            y, z_e, ids = model(x)
-            mask = torch.arange(seq_len_pad, device=x.device).unsqueeze(
-                0
-            ) < lengths.unsqueeze(1)
-            mask = mask.unsqueeze(1)  # [B, 1, T]
-            e_k = model.vq.codebook(ids)  # [B*T_e, D]
-
-            se = mask * (y - x) ** 2
-            mse = se.sum() / mask.sum()
-            codebook_loss = torch.mean((z_e.detach() - e_k) ** 2)
-            commitment_loss = torch.mean((z_e - e_k.detach()) ** 2)
-
-            loss = mse + codebook_loss + 0.25 * commitment_loss
-
-            print(loss.item())
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-
-if __name__ == "__main__":
-    main()
