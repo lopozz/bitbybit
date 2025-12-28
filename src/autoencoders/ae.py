@@ -15,48 +15,46 @@ https://www.cs.toronto.edu/~hinton/absps/science.pdf
 import torch
 import torch.nn as nn
 
-from torch import Tensor
-from typing import List, Callable
+from typing import List
 
 
 class LinearEncoder(nn.Module):
-    def __init__(self, dims: List[int]):
+    def __init__(self, dims):
         super().__init__()
-        assert len(dims) >= 2, "dims must be like [in_dim, ..., latent_dim]"
-        self.dims = dims
+        self.layers = nn.ModuleList()
+        self.bns = nn.ModuleList()
 
-        layers = []
         for in_d, out_d in zip(dims[:-1], dims[1:]):
-            layers.append(nn.Linear(in_d, out_d))
-        self.layers = nn.ModuleList(layers)
+            self.layers.append(nn.Linear(in_d, out_d))
+            self.bns.append(nn.BatchNorm1d(out_d))
 
     def forward(self, x):
-        # x: [B, in_dim]
-
-        for i, layer in enumerate(self.layers):
+        for i, (layer, bn) in enumerate(zip(self.layers, self.bns)):
             x = layer(x)
-            if i < len(self.layers) - 1:  # no nonlinearity on code by default
-                x = torch.sigmoid(x)
-        return x  # z
-
+            if i < len(self.layers) - 1:
+                x = bn(x)
+                x = torch.relu(x)
+        return x
 
 class LinearDecoder(nn.Module):
-    def __init__(self, dims: List[int], act: Callable[[Tensor], Tensor]):
+    def __init__(self, dims):
         super().__init__()
-        assert len(dims) >= 2, "dims must be like [latent_dim, ..., out_dim]"
-        self.dims = dims
+        self.layers = nn.ModuleList()
+        self.bns = nn.ModuleList()
 
-        layers = []
         for in_d, out_d in zip(dims[:-1], dims[1:]):
-            layers.append(nn.Linear(in_d, out_d))
-        self.layers = nn.ModuleList(layers)
+            self.layers.append(nn.Linear(in_d, out_d))
+            self.bns.append(nn.BatchNorm1d(out_d))
 
     def forward(self, z):
         x = z
-        for layer in self.layers:
+        for i, (layer, bn) in enumerate(zip(self.layers, self.bns)):
             x = layer(x)
-            x = torch.sigmoid(x)
-
+            if i < len(self.layers) - 1:
+                x = bn(x)
+                x = torch.relu(x)
+            else:
+                x = torch.sigmoid(x)
         return x
 
 
@@ -81,81 +79,156 @@ class LinearAE(nn.Module):
         z = self.encode(x)
         out = self.decode(z)
         return out, z
-
+    
 
 class ConvEncoder(nn.Module):
-    def __init__(self, in_channels=1, hidden_dim=256, n_layers=6, verbose=False):
+    def __init__(self, dims: List[int]):
         super().__init__()
-        self.verbose = verbose
-        convs = []
-        for i in range(n_layers):
-            convs.append(
-                nn.Conv1d(
-                    in_channels if i == 0 else hidden_dim,
-                    hidden_dim,
-                    kernel_size=4,
-                    stride=2,
-                    padding=1,
-                )
-            )
-        self.convs = nn.ModuleList(convs)
+        assert len(dims) >= 2, "dims must be like [in_dim, ..., latent_dim]"
+        self.dims = dims
+
+        layers = []
+        for in_d, out_d in zip(dims[:-1], dims[1:]):
+            layers.append(nn.Conv2d(in_channels=in_d, out_channels=out_d, kernel_size=3, stride=2, padding=1, bias=False))
+        self.layers = nn.ModuleList(layers)
 
     def forward(self, x):
-        # x: [B, C, T]
-        if self.verbose:
-            print(f"Input: {x.shape}")
-            print("Encoder")
-        for i, conv in enumerate(self.convs):
-            x = conv(x)
-            x = torch.relu(x)
+        # x: [B, C, H, W]
 
-            if self.verbose:
-                print(f"After layer {i + 1}: {x.shape}")
-
-        return x
-
-
-class ConvDecoder(nn.Module):
-    def __init__(self, out_channels=1, hidden_dim=256, n_layers=6, verbose=False):
-        super().__init__()
-        self.verbose = verbose
-        deconvs = []
-        for i in range(n_layers):
-            deconvs.append(
-                nn.ConvTranspose1d(
-                    hidden_dim,
-                    out_channels if i == n_layers - 1 else hidden_dim,
-                    kernel_size=4,
-                    stride=2,
-                    padding=1,
-                    output_padding=0,
-                )
-            )
-        self.deconvs = nn.ModuleList(deconvs)
-
-    def forward(self, x):
-        if self.verbose:
-            print("Decoder")
-        for i, deconv in enumerate(self.deconvs):
-            x = deconv(x)
-            if i < len(self.deconvs) - 1:
+        for i, layer in enumerate(self.layers):
+            x = layer(x)
+            if i < len(self.layers) - 1:  # no nonlinearity on code by default
                 x = torch.relu(x)
-                if self.verbose:
-                    print(f"After layer {i + 1}: {x.shape}")
-        if self.verbose:
-            print(f"Output: {x.shape}")
+        return x  # z
+    
+    
+class ConvDecoder(nn.Module):
+    def __init__(self, dims: List[int]):
+        super().__init__()
+        assert len(dims) >= 2
+
+        self.layers = nn.ModuleList()
+        self.bns = nn.ModuleList()
+
+        for in_d, out_d in zip(dims[:-1], dims[1:]):
+            self.layers.append(
+                nn.ConvTranspose2d(
+                    in_d, out_d,
+                    kernel_size=3, stride=2, padding=1,
+                    output_padding=1, bias=False
+                )
+            )
+            self.bns.append(nn.BatchNorm2d(out_d))
+
+    def forward(self, z):
+        x = z
+        for i, (conv, bn) in enumerate(zip(self.layers, self.bns)):
+            x = conv(x)
+            if i < len(self.layers) - 1:
+                x = bn(x)
+                x = torch.relu(x)
+            else:
+                x = torch.sigmoid(x)
         return x
 
-
+    
 class ConvAE(nn.Module):
-    def __init__(self, hidden_dim=512, n_layers=6, verbose=False):
+    """
+    Example dims: [1, 8, 16, 4]
+    """
+
+    def __init__(self, dims: List[int]):
         super().__init__()
-        self.enc = ConvEncoder(
-            in_channels=1, hidden_dim=hidden_dim, n_layers=n_layers, verbose=verbose
-        )
-        self.dec = ConvDecoder(out_channels=1, hidden_dim=hidden_dim, n_layers=n_layers)
+        self.enc = ConvEncoder(dims)
+        dims = list(reversed(dims))  # mirror
+        self.dec = ConvDecoder(dims)
+
+    def encode(self, x):
+        return self.enc(x)
+
+    def decode(self, z):
+        return self.dec(z)
 
     def forward(self, x):
-        z = self.enc(x)  # [B, C, T_e]
-        y = self.dec(z)  # [B, C, T]
-        return y
+        z = self.encode(x)
+        out = self.decode(z)
+        return out, z
+
+
+
+# class ConvEncoder(nn.Module):
+#     def __init__(self, in_channels=1, hidden_dim=256, n_layers=6, verbose=False):
+#         super().__init__()
+#         self.verbose = verbose
+#         convs = []
+#         for i in range(n_layers):
+#             convs.append(
+#                 nn.Conv1d(
+#                     in_channels if i == 0 else hidden_dim,
+#                     hidden_dim,
+#                     kernel_size=4,
+#                     stride=2,
+#                     padding=1,
+#                 )
+#             )
+#         self.convs = nn.ModuleList(convs)
+
+#     def forward(self, x):
+#         # x: [B, C, T]
+#         if self.verbose:
+#             print(f"Input: {x.shape}")
+#             print("Encoder")
+#         for i, conv in enumerate(self.convs):
+#             x = conv(x)
+#             x = torch.relu(x)
+
+#             if self.verbose:
+#                 print(f"After layer {i + 1}: {x.shape}")
+
+#         return x
+
+
+# class ConvDecoder(nn.Module):
+#     def __init__(self, out_channels=1, hidden_dim=256, n_layers=6, verbose=False):
+#         super().__init__()
+#         self.verbose = verbose
+#         deconvs = []
+#         for i in range(n_layers):
+#             deconvs.append(
+#                 nn.ConvTranspose1d(
+#                     hidden_dim,
+#                     out_channels if i == n_layers - 1 else hidden_dim,
+#                     kernel_size=4,
+#                     stride=2,
+#                     padding=1,
+#                     output_padding=0,
+#                 )
+#             )
+#         self.deconvs = nn.ModuleList(deconvs)
+
+#     def forward(self, x):
+#         if self.verbose:
+#             print("Decoder")
+#         for i, deconv in enumerate(self.deconvs):
+#             x = deconv(x)
+#             if i < len(self.deconvs) - 1:
+#                 x = torch.relu(x)
+#                 if self.verbose:
+#                     print(f"After layer {i + 1}: {x.shape}")
+#         if self.verbose:
+#             print(f"Output: {x.shape}")
+#         return x
+
+
+# class ConvAE(nn.Module):
+#     def __init__(self, hidden_dim=512, n_layers=6, verbose=False):
+#         super().__init__()
+#         self.enc = ConvEncoder(
+#             in_channels=1, hidden_dim=hidden_dim, n_layers=n_layers, verbose=verbose
+#         )
+#         self.dec = ConvDecoder(out_channels=1, hidden_dim=hidden_dim, n_layers=n_layers)
+
+#     def forward(self, x):
+#         z = self.enc(x)  # [B, C, T_e]
+#         y = self.dec(z)  # [B, C, T]
+#         return y
