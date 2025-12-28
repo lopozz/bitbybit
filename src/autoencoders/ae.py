@@ -4,7 +4,7 @@ G. E. Hinton* and R. R. Salakhutdinov - 2006
 
 High-dimensional data can be converted to low-dimensional codes by training a multilayer neural
 network with a small central layer to reconstruct high-dimensional input vectors. Gradient descent
-can be used for fine-tuning the weights in such ‘‘autoencoder’’ networks, but this works well only if
+can be used for fine-tuning the weights in such "autoencoder" networks, but this works well only if
 the initial weights are close to a good solution. We describe an effective way of initializing the
 weights that allows deep autoencoder networks to learn low-dimensional codes that work much
 better than principal components analysis as a tool to reduce the dimensionality of data.
@@ -12,32 +12,23 @@ better than principal components analysis as a tool to reduce the dimensionality
 https://www.cs.toronto.edu/~hinton/absps/science.pdf
 """
 
+import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from torch import Tensor
 from typing import List, Callable
 
 
-
-
-
 class LinearEncoder(nn.Module):
-    """
-    Example dims: [784, 1000, 500, 250, 30]
-    Produces z of size 30.
-    """
-    def __init__(self, dims: List[int], act: Callable[[Tensor], Tensor]):
+    def __init__(self, dims: List[int]):
         super().__init__()
         assert len(dims) >= 2, "dims must be like [in_dim, ..., latent_dim]"
         self.dims = dims
-        self.act = act
 
         layers = []
         for in_d, out_d in zip(dims[:-1], dims[1:]):
             layers.append(nn.Linear(in_d, out_d))
         self.layers = nn.ModuleList(layers)
-
 
     def forward(self, x):
         # x: [B, in_dim]
@@ -45,51 +36,40 @@ class LinearEncoder(nn.Module):
         for i, layer in enumerate(self.layers):
             x = layer(x)
             if i < len(self.layers) - 1:  # no nonlinearity on code by default
-                x = self.act(x)
+                x = torch.sigmoid(x)
         return x  # z
 
 
 class LinearDecoder(nn.Module):
-    """
-    Example dims: [30, 250, 500, 1000, 784]
-    Reconstructs to size 784.
-    """
     def __init__(self, dims: List[int], act: Callable[[Tensor], Tensor]):
         super().__init__()
         assert len(dims) >= 2, "dims must be like [latent_dim, ..., out_dim]"
         self.dims = dims
-        self.act = act
 
         layers = []
         for in_d, out_d in zip(dims[:-1], dims[1:]):
             layers.append(nn.Linear(in_d, out_d))
         self.layers = nn.ModuleList(layers)
 
-
     def forward(self, z):
-
         x = z
-        for i, layer in enumerate(self.layers):
+        for layer in self.layers:
             x = layer(x)
-            if i < len(self.layers) - 1:
-                x = self.act(x, self.activation)
-            else:
-                x = F.relu(x) # by default
+            x = torch.sigmoid(x)
 
         return x
 
 
 class LinearAE(nn.Module):
     """
-    Provide encoder dims only; decoder is created as the mirror.
-    Example:
-      ae = AE(enc_dims=[784, 1000, 500, 250, 30], out_activation="sigmoid")
+    Example dims: [784, 1000, 500, 250, 30]
     """
-    def __init__(self, dims: List[int], act: Callable[[Tensor], Tensor]):
+
+    def __init__(self, dims: List[int]):
         super().__init__()
-        self.enc = LinearEncoder(dims, act=act)
+        self.enc = LinearEncoder(dims)
         dims = list(reversed(dims))  # mirror
-        self.dec = LinearDecoder(dims, act=act)
+        self.dec = LinearDecoder(dims)
 
     def encode(self, x):
         return self.enc(x)
@@ -127,7 +107,7 @@ class ConvEncoder(nn.Module):
             print("Encoder")
         for i, conv in enumerate(self.convs):
             x = conv(x)
-            x = F.relu(x)
+            x = torch.relu(x)
 
             if self.verbose:
                 print(f"After layer {i + 1}: {x.shape}")
@@ -159,7 +139,7 @@ class ConvDecoder(nn.Module):
         for i, deconv in enumerate(self.deconvs):
             x = deconv(x)
             if i < len(self.deconvs) - 1:
-                x = F.relu(x)
+                x = torch.relu(x)
                 if self.verbose:
                     print(f"After layer {i + 1}: {x.shape}")
         if self.verbose:

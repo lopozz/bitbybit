@@ -11,10 +11,11 @@ If an autoencoder succeeds in simply learning to set $g(f(x))=x$ everywhere, the
 ## Resources
 1. [Autoencoders - CH 14](https://www.deeplearningbook.org/contents/autoencoders.html)
 2. [Autoencoders | Deep Learning Animated](https://www.youtube.com/watch?v=hZ4a4NgM3u0)
-3. [Variational Autoencoders | Generative AI Animated](https://www.youtube.com/watch?v=qJeaCHQ1k2w)
-4. [Neural Discrete Representation Learning](https://arxiv.org/pdf/1711.00937)
-5. [Reproducing Neural Discrete Representation Learning](https://github.com/ritheshkumar95/pytorch-vqvae/blob/master/final_project.pdf)
-6. [Vector Quantized Variational AutoEncoder (VQVAE) From Scratch](https://www.youtube.com/watch?v=1mi2MSvigcc) 🎥
-7. [Vector_Quantized_Variational_AutoEncoders.ipynb](https://github.com/priyammaz/PyTorch-Adventures/blob/main/PyTorch%20for%20Generation/AutoEncoders/Intro%20to%20AutoEncoders/Vector_Quantized_Variational_AutoEncoders.ipynb)
-8. [Vector-Quantized Variational Autoencoders (VQ-VAEs)](https://www.youtube.com/watch?v=yQvELPjmyn0) 🎥
-9. [Residual Vector Quantization (RVQ) From Scratch](https://www.youtube.com/watch?v=ZnyfaQRQ8GI) 🎥
+3. [Intro_To_AutoEncoders.ipynb](https://github.com/priyammaz/PyTorch-Adventures/blob/main/PyTorch%20for%20Generation/AutoEncoders/Intro%20to%20AutoEncoders/Intro_To_AutoEncoders.ipynb)
+4. [Variational Autoencoders | Generative AI Animated](https://www.youtube.com/watch?v=qJeaCHQ1k2w)
+5. [Neural Discrete Representation Learning](https://arxiv.org/pdf/1711.00937)
+6. [Reproducing Neural Discrete Representation Learning](https://github.com/ritheshkumar95/pytorch-vqvae/blob/master/final_project.pdf)
+7. [Vector Quantized Variational AutoEncoder (VQVAE) From Scratch](https://www.youtube.com/watch?v=1mi2MSvigcc) 🎥
+8. [Vector_Quantized_Variational_AutoEncoders.ipynb](https://github.com/priyammaz/PyTorch-Adventures/blob/main/PyTorch%20for%20Generation/AutoEncoders/Intro%20to%20AutoEncoders/Vector_Quantized_Variational_AutoEncoders.ipynb)
+9. [Vector-Quantized Variational Autoencoders (VQ-VAEs)](https://www.youtube.com/watch?v=yQvELPjmyn0) 🎥
+10. [Residual Vector Quantization (RVQ) From Scratch](https://www.youtube.com/watch?v=ZnyfaQRQ8GI) 🎥

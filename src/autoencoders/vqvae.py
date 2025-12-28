@@ -19,17 +19,9 @@ further evidence of the utility of the learnt representations.
 https://arxiv.org/pdf/1711.00937
 """
 
-import tqdm
 import torch
-import argparse
 
 import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
-
-from tqdm import tqdm
-from datasets import load_dataset
-from torch.utils.data import DataLoader
 
 
 class VectorQuantizer(nn.Module):
@@ -80,7 +72,7 @@ class Encoder(nn.Module):
             print("Encoder")
         for i, conv in enumerate(self.convs):
             x = conv(x)
-            x = F.relu(x)
+            x = torch.relu(x)
 
             if self.verbose:
                 print(f"After layer {i + 1}: {x.shape}")
@@ -112,7 +104,7 @@ class Decoder(nn.Module):
         for i, deconv in enumerate(self.deconvs):
             x = deconv(x)
             if i < len(self.deconvs) - 1:
-                x = F.relu(x)
+                x = torch.relu(x)
                 if self.verbose:
                     print(f"After layer {i + 1}: {x.shape}")
         if self.verbose:
