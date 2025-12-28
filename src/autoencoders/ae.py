@@ -1,8 +1,109 @@
+"""
+Reducing the Dimensionality of Data with Neural Networks
+G. E. Hinton* and R. R. Salakhutdinov - 2006
+
+High-dimensional data can be converted to low-dimensional codes by training a multilayer neural
+network with a small central layer to reconstruct high-dimensional input vectors. Gradient descent
+can be used for fine-tuning the weights in such ‘‘autoencoder’’ networks, but this works well only if
+the initial weights are close to a good solution. We describe an effective way of initializing the
+weights that allows deep autoencoder networks to learn low-dimensional codes that work much
+better than principal components analysis as a tool to reduce the dimensionality of data.
+
+https://www.cs.toronto.edu/~hinton/absps/science.pdf
+"""
+
 import torch.nn as nn
 import torch.nn.functional as F
 
+from torch import Tensor
+from typing import List, Callable
 
-class Encoder(nn.Module):
+
+
+
+
+class LinearEncoder(nn.Module):
+    """
+    Example dims: [784, 1000, 500, 250, 30]
+    Produces z of size 30.
+    """
+    def __init__(self, dims: List[int], act: Callable[[Tensor], Tensor]):
+        super().__init__()
+        assert len(dims) >= 2, "dims must be like [in_dim, ..., latent_dim]"
+        self.dims = dims
+        self.act = act
+
+        layers = []
+        for in_d, out_d in zip(dims[:-1], dims[1:]):
+            layers.append(nn.Linear(in_d, out_d))
+        self.layers = nn.ModuleList(layers)
+
+
+    def forward(self, x):
+        # x: [B, in_dim]
+
+        for i, layer in enumerate(self.layers):
+            x = layer(x)
+            if i < len(self.layers) - 1:  # no nonlinearity on code by default
+                x = self.act(x)
+        return x  # z
+
+
+class LinearDecoder(nn.Module):
+    """
+    Example dims: [30, 250, 500, 1000, 784]
+    Reconstructs to size 784.
+    """
+    def __init__(self, dims: List[int], act: Callable[[Tensor], Tensor]):
+        super().__init__()
+        assert len(dims) >= 2, "dims must be like [latent_dim, ..., out_dim]"
+        self.dims = dims
+        self.act = act
+
+        layers = []
+        for in_d, out_d in zip(dims[:-1], dims[1:]):
+            layers.append(nn.Linear(in_d, out_d))
+        self.layers = nn.ModuleList(layers)
+
+
+    def forward(self, z):
+
+        x = z
+        for i, layer in enumerate(self.layers):
+            x = layer(x)
+            if i < len(self.layers) - 1:
+                x = self.act(x, self.activation)
+            else:
+                x = F.relu(x) # by default
+
+        return x
+
+
+class LinearAE(nn.Module):
+    """
+    Provide encoder dims only; decoder is created as the mirror.
+    Example:
+      ae = AE(enc_dims=[784, 1000, 500, 250, 30], out_activation="sigmoid")
+    """
+    def __init__(self, dims: List[int], act: Callable[[Tensor], Tensor]):
+        super().__init__()
+        self.enc = LinearEncoder(dims, act=act)
+        dims = list(reversed(dims))  # mirror
+        self.dec = LinearDecoder(dims, act=act)
+
+    def encode(self, x):
+        return self.enc(x)
+
+    def decode(self, z):
+        return self.dec(z)
+
+    def forward(self, x):
+        z = self.encode(x)
+        out = self.decode(z)
+        return out, z
+
+
+class ConvEncoder(nn.Module):
     def __init__(self, in_channels=1, hidden_dim=256, n_layers=6, verbose=False):
         super().__init__()
         self.verbose = verbose
@@ -34,7 +135,7 @@ class Encoder(nn.Module):
         return x
 
 
-class Decoder(nn.Module):
+class ConvDecoder(nn.Module):
     def __init__(self, out_channels=1, hidden_dim=256, n_layers=6, verbose=False):
         super().__init__()
         self.verbose = verbose
@@ -66,13 +167,13 @@ class Decoder(nn.Module):
         return x
 
 
-class AE(nn.Module):
+class ConvAE(nn.Module):
     def __init__(self, hidden_dim=512, n_layers=6, verbose=False):
         super().__init__()
-        self.enc = Encoder(
+        self.enc = ConvEncoder(
             in_channels=1, hidden_dim=hidden_dim, n_layers=n_layers, verbose=verbose
         )
-        self.dec = Decoder(out_channels=1, hidden_dim=hidden_dim, n_layers=n_layers)
+        self.dec = ConvDecoder(out_channels=1, hidden_dim=hidden_dim, n_layers=n_layers)
 
     def forward(self, x):
         z = self.enc(x)  # [B, C, T_e]

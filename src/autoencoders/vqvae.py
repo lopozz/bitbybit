@@ -1,5 +1,6 @@
 """
 Neural Discrete Representation Learning
+Van Den Oord, Aaron, and Oriol Vinyals - 2017
 
 Learning useful representations without supervision remains a key challenge in
 machine learning. In this paper, we propose a simple yet powerful generative
