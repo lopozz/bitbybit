@@ -10,5 +10,7 @@
 #### Low-Rank Adaptation (LoRA)
 
 #### Autoencoders
-- Vector Quantizer
+- AE
 - VQVAE
+
+#### WaveNet

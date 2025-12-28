@@ -145,17 +145,3 @@ class VQVAE(nn.Module):
         y = self.dec(e_k)  # [B, D, T]
 
         return y, z_e, ids
-
-
-def collate_fn(batch):
-    wavs = [torch.tensor(b["audio"]["array"]).float() for b in batch]
-    lengths = torch.tensor([w.shape[-1] for w in wavs])  # [B]
-    max_len = lengths.max()
-
-    padded = []
-    for w in wavs:
-        pad = max_len - w.shape[-1]
-        padded.append(F.pad(w.unsqueeze(0), (0, pad)))  # [1, max_len]
-
-    x = torch.stack(padded, dim=0)  # [B, 1, max_len]
-    return x, lengths
