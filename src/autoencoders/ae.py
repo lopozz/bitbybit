@@ -36,6 +36,7 @@ class LinearEncoder(nn.Module):
                 x = torch.relu(x)
         return x
 
+
 class LinearDecoder(nn.Module):
     def __init__(self, dims):
         super().__init__()
@@ -79,7 +80,7 @@ class LinearAE(nn.Module):
         z = self.encode(x)
         out = self.decode(z)
         return out, z
-    
+
 
 class ConvEncoder(nn.Module):
     def __init__(self, dims: List[int]):
@@ -89,7 +90,16 @@ class ConvEncoder(nn.Module):
 
         layers = []
         for in_d, out_d in zip(dims[:-1], dims[1:]):
-            layers.append(nn.Conv2d(in_channels=in_d, out_channels=out_d, kernel_size=3, stride=2, padding=1, bias=False))
+            layers.append(
+                nn.Conv2d(
+                    in_channels=in_d,
+                    out_channels=out_d,
+                    kernel_size=3,
+                    stride=2,
+                    padding=1,
+                    bias=False,
+                )
+            )
         self.layers = nn.ModuleList(layers)
 
     def forward(self, x):
@@ -100,8 +110,8 @@ class ConvEncoder(nn.Module):
             if i < len(self.layers) - 1:  # no nonlinearity on code by default
                 x = torch.relu(x)
         return x  # z
-    
-    
+
+
 class ConvDecoder(nn.Module):
     def __init__(self, dims: List[int]):
         super().__init__()
@@ -113,9 +123,13 @@ class ConvDecoder(nn.Module):
         for in_d, out_d in zip(dims[:-1], dims[1:]):
             self.layers.append(
                 nn.ConvTranspose2d(
-                    in_d, out_d,
-                    kernel_size=3, stride=2, padding=1,
-                    output_padding=1, bias=False
+                    in_d,
+                    out_d,
+                    kernel_size=3,
+                    stride=2,
+                    padding=1,
+                    output_padding=1,
+                    bias=False,
                 )
             )
             self.bns.append(nn.BatchNorm2d(out_d))
@@ -131,7 +145,7 @@ class ConvDecoder(nn.Module):
                 x = torch.sigmoid(x)
         return x
 
-    
+
 class ConvAE(nn.Module):
     """
     Example dims: [1, 8, 16, 4]
@@ -153,7 +167,6 @@ class ConvAE(nn.Module):
         z = self.encode(x)
         out = self.decode(z)
         return out, z
-
 
 
 # class ConvEncoder(nn.Module):
