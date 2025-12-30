@@ -20,9 +20,9 @@ https://arxiv.org/pdf/1711.00937
 """
 
 import torch
-
 import torch.nn as nn
 
+from typing import List
 
 class VectorQuantizer(nn.Module):
     def __init__(self, codebook_size: int = 1024, codebook_dim: int = 2):
@@ -46,6 +46,73 @@ class VectorQuantizer(nn.Module):
         e_k = x + (e_k - x).detach()
 
         return e_k, ids
+
+class LinearEncoder(nn.Module):
+    def __init__(self, dims):
+        super().__init__()
+        self.layers = nn.ModuleList()
+        self.bns = nn.ModuleList()
+
+        for in_d, out_d in zip(dims[:-1], dims[1:]):
+            self.layers.append(nn.Linear(in_d, out_d))
+            self.bns.append(nn.BatchNorm1d(out_d))
+
+    def forward(self, x):
+        for i, (layer, bn) in enumerate(zip(self.layers, self.bns)):
+            x = layer(x)
+            if i < len(self.layers) - 1:
+                x = bn(x)
+                x = torch.relu(x)
+        return x
+
+
+class LinearDecoder(nn.Module):
+    def __init__(self, dims):
+        super().__init__()
+        self.layers = nn.ModuleList()
+        self.bns = nn.ModuleList()
+
+        for in_d, out_d in zip(dims[:-1], dims[1:]):
+            self.layers.append(nn.Linear(in_d, out_d))
+            self.bns.append(nn.BatchNorm1d(out_d))
+
+    def forward(self, z):
+        x = z
+        for i, (layer, bn) in enumerate(zip(self.layers, self.bns)):
+            x = layer(x)
+            if i < len(self.layers) - 1:
+                x = bn(x)
+                x = torch.relu(x)
+            else:
+                x = torch.sigmoid(x)
+        return x
+
+
+class LinearVQVAE(nn.Module):
+    """
+    Example dims: [784, 1000, 500, 250, 30]
+    """
+
+    def __init__(self, dims: List[int], codebook_size: int):
+        super().__init__()
+        self.enc = LinearEncoder(dims)
+
+        self.vq = VectorQuantizer(codebook_size, dims[-1])
+
+        dims = list(reversed(dims))  # mirror
+        self.dec = LinearDecoder(dims)
+
+    def encode(self, x):
+        return self.enc(x)
+
+    def decode(self, z):
+        return self.dec(z)
+
+    def forward(self, x):
+        z = self.encode(x)
+        e_k, ids = self.vq(z)
+        out = self.decode(e_k)
+        return out, z, e_k, ids
 
 
 class Encoder(nn.Module):
