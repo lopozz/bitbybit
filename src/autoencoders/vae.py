@@ -5,42 +5,40 @@ Kingma, Diederik P. and Max Welling. - 2013
 How can we perform efficient inference and learning in directed probabilistic
 models, in the presence of continuous latent variables with intractable posterior
 distributions, and large datasets? We introduce a stochastic variational inference
-and learning algorithm that scales to large datasets and, under some mild 
-differentiability conditions, even works in the intractable case. Our contributions 
+and learning algorithm that scales to large datasets and, under some mild
+differentiability conditions, even works in the intractable case. Our contributions
 are two-fold. First, we show that a reparameterization of the variational lower bound
-yields a lower bound estimator that can be straightforwardly optimized using standard 
+yields a lower bound estimator that can be straightforwardly optimized using standard
 stochastic gradient methods. Second, we show that for i.i.d. datasets with
-continuous latent variables per datapoint, posterior inference can be made especially 
-efficient by fitting an approximate inference model (also called a recognition model) 
-to the intractable posterior using the proposed lower bound estimator. Theoretical 
+continuous latent variables per datapoint, posterior inference can be made especially
+efficient by fitting an approximate inference model (also called a recognition model)
+to the intractable posterior using the proposed lower bound estimator. Theoretical
 advantages are reflected in experimental results.
 
 https://arxiv.org/pdf/1312.6114
 """
 
-
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from typing import List
 
-def VAELoss(x, y, mean, log_var, recon_weight=1, kl_weight=1):
 
+def VAELoss(x, y, mean, log_var, recon_weight=1, kl_weight=1):
     # compute the MSE For Every Pixel [B, H*W]
-    pixel_mse = ((x-y)**2)
+    pixel_mse = (x - y) ** 2
 
     # sum  up pixel loss per image and average across batch
     recon_loss = pixel_mse.sum(axis=-1).mean()
 
     # compute KL per image and sum across flattened latent
-    kl = (1 + log_var - mean**2 - torch.exp(log_var)) #.flatten(1)
-    kl_per_image = - 0.5 * torch.sum(kl, dim=-1)
+    kl = 1 + log_var - mean**2 - torch.exp(log_var)  # .flatten(1)
+    kl_per_image = -0.5 * torch.sum(kl, dim=-1)
 
     # average KL across the batch ###
     kl_loss = torch.mean(kl_per_image)
-    
-    return recon_weight*recon_loss, kl_weight*kl_loss
+
+    return recon_weight * recon_loss, kl_weight * kl_loss
 
 
 class LinearEncoder(nn.Module):
@@ -93,13 +91,11 @@ class LinearVAE(nn.Module):
         super().__init__()
         self.enc = LinearEncoder(dims[:-1])
 
-        self.fn_mu =  nn.Linear(dims[-2], dims[-1])
+        self.fn_mu = nn.Linear(dims[-2], dims[-1])
         self.fn_logvar = nn.Linear(dims[-2], dims[-1])
 
         dims = list(reversed(dims))  # mirror
         self.dec = LinearDecoder(dims)
-
-        
 
     def encode(self, x):
         return self.enc(x)
@@ -113,9 +109,120 @@ class LinearVAE(nn.Module):
         # sample with reparamaterization trick
         mu = self.fn_mu(x)
         logvar = self.fn_logvar(x)
-        sigma = torch.exp(0.5*logvar)
-        noise = torch.randn_like(sigma, device=sigma.device)
-        z = mu + sigma*noise
+        sigma = torch.exp(0.5 * logvar)
+        noise = torch.randn_like(sigma)
+        z = mu + sigma * noise
+
+        out = self.decode(z)
+        return out, z, mu, logvar
+
+
+class ConvEncoder(nn.Module):
+    def __init__(self, dims: List[int]):
+        super().__init__()
+        assert len(dims) >= 2, "dims must be like [in_dim, ..., latent_dim]"
+        self.dims = dims
+
+        layers = []
+        for in_d, out_d in zip(dims[:-1], dims[1:]):
+            layers.append(
+                nn.Conv2d(
+                    in_channels=in_d,
+                    out_channels=out_d,
+                    kernel_size=3,
+                    stride=2,
+                    padding=1,
+                    bias=False,
+                )
+            )
+        self.layers = nn.ModuleList(layers)
+
+    def forward(self, x):
+        # x: [B, C, H, W]
+
+        for i, layer in enumerate(self.layers):
+            x = layer(x)
+            if i < len(self.layers) - 1:  # no nonlinearity on code by default
+                x = torch.relu(x)
+        return x  # z
+
+
+class ConvDecoder(nn.Module):
+    def __init__(self, dims: List[int]):
+        super().__init__()
+        assert len(dims) >= 2
+
+        self.layers = nn.ModuleList()
+        self.bns = nn.ModuleList()
+
+        for in_d, out_d in zip(dims[:-1], dims[1:]):
+            self.layers.append(
+                nn.ConvTranspose2d(
+                    in_d,
+                    out_d,
+                    kernel_size=3,
+                    stride=2,
+                    padding=1,
+                    output_padding=1,
+                    bias=False,
+                )
+            )
+            self.bns.append(nn.BatchNorm2d(out_d))
+
+    def forward(self, z):
+        x = z
+        for i, (conv, bn) in enumerate(zip(self.layers, self.bns)):
+            x = conv(x)
+            if i < len(self.layers) - 1:
+                x = bn(x)
+                x = torch.relu(x)
+            else:
+                x = torch.sigmoid(x)
+        return x
+
+
+class ConvVAE(nn.Module):
+    """
+    Example dims: [1, 8, 16, 4]
+    """
+
+    def __init__(self, dims: List[int]):
+        super().__init__()
+        self.enc = ConvEncoder(dims)
+
+        self.conv_mu = nn.Conv2d(
+            in_channels=dims[-1],
+            out_channels=dims[-1],
+            kernel_size=3,
+            stride=1,
+            padding="same",
+        )
+        self.conv_logvar = nn.Conv2d(
+            in_channels=dims[-1],
+            out_channels=dims[-1],
+            kernel_size=3,
+            stride=1,
+            padding="same",
+        )
+
+        dims = list(reversed(dims))  # mirror
+        self.dec = ConvDecoder(dims)
+
+    def encode(self, x):
+        return self.enc(x)
+
+    def decode(self, z):
+        return self.dec(z)
+
+    def forward(self, x):
+        x = self.encode(x)
+
+        # sample with reparamaterization trick
+        mu = self.conv_mu(x)
+        logvar = self.conv_logvar(x)
+        sigma = torch.exp(0.5 * logvar)
+        noise = torch.randn_like(sigma)
+        z = mu + sigma * noise
 
         out = self.decode(z)
         return out, z, mu, logvar

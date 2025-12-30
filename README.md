@@ -11,6 +11,7 @@
 
 #### Autoencoders
 - AE
+- VAE
 - VQVAE
 
 #### WaveNet

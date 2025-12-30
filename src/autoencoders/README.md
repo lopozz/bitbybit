@@ -15,10 +15,11 @@ If an autoencoder succeeds in simply learning to set $g(f(x))=x$ everywhere, the
 3. [Intro_To_AutoEncoders.ipynb](https://github.com/priyammaz/PyTorch-Adventures/blob/main/PyTorch%20for%20Generation/AutoEncoders/Intro%20to%20AutoEncoders/Intro_To_AutoEncoders.ipynb)
 4. [Reducing the Dimensionality of Data with Neural Networks](https://www.cs.toronto.edu/~hinton/absps/science.pdf) 📝
 5. [Variational Autoencoders | Generative AI Animated](https://www.youtube.com/watch?v=qJeaCHQ1k2w) 🎥
-6. [Auto-Encoding Variational Bayes](https://arxiv.org/pdf/1312.6114) 📝
-7. [Neural Discrete Representation Learning](https://arxiv.org/pdf/1711.00937) 📝
-8. [Reproducing Neural Discrete Representation Learning](https://github.com/ritheshkumar95/pytorch-vqvae/blob/master/final_project.pdf)
-9. [Vector Quantized Variational AutoEncoder (VQVAE) From Scratch](https://www.youtube.com/watch?v=1mi2MSvigcc) 🎥
-10. [Vector_Quantized_Variational_AutoEncoders.ipynb](https://github.com/priyammaz/PyTorch-Adventures/blob/main/PyTorch%20for%20Generation/AutoEncoders/Intro%20to%20AutoEncoders/Vector_Quantized_Variational_AutoEncoders.ipynb)
-9. [Vector-Quantized Variational Autoencoders (VQ-VAEs)](https://www.youtube.com/watch?v=yQvELPjmyn0) 🎥
-10. [Residual Vector Quantization (RVQ) From Scratch](https://www.youtube.com/watch?v=ZnyfaQRQ8GI) 🎥
+6. [An Introduction to Variational Autoencoders](https://arxiv.org/pdf/1906.02691) 📝
+7. [Variational_AutoEncoders.ipynb](https://github.com/priyammaz/PyTorch-Adventures/blob/main/PyTorch%20for%20Generation/AutoEncoders/Intro%20to%20AutoEncoders/Variational_AutoEncoders.ipynb)
+8. [Neural Discrete Representation Learning](https://arxiv.org/pdf/1711.00937) 📝
+9. [Reproducing Neural Discrete Representation Learning](https://github.com/ritheshkumar95/pytorch-vqvae/blob/master/final_project.pdf)
+10. [Vector Quantized Variational AutoEncoder (VQVAE) From Scratch](https://www.youtube.com/watch?v=1mi2MSvigcc) 🎥
+11. [Vector_Quantized_Variational_AutoEncoders.ipynb](https://github.com/priyammaz/PyTorch-Adventures/blob/main/PyTorch%20for%20Generation/AutoEncoders/Intro%20to%20AutoEncoders/Vector_Quantized_Variational_AutoEncoders.ipynb)
+12. [Vector-Quantized Variational Autoencoders (VQ-VAEs)](https://www.youtube.com/watch?v=yQvELPjmyn0) 🎥
+13. [Residual Vector Quantization (RVQ) From Scratch](https://www.youtube.com/watch?v=ZnyfaQRQ8GI) 🎥
