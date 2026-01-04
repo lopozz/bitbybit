@@ -23,29 +23,35 @@ import torch
 import torch.nn as nn
 
 from typing import List
+    
 
-class VectorQuantizer(nn.Module):
-    def __init__(self, codebook_size: int = 1024, codebook_dim: int = 2):
+class LinearVectorQuantizer(nn.Module):
+    """
+    For vector latents: x is [B, D]
+    Returns:
+      e_k: [B, D] (quantized, straight-through)
+      ids: [B] (code index per item)
+    """
+    def __init__(self, codebook_size: int, codebook_dim: int):
         super().__init__()
-
-        self.codebook_dim = codebook_dim
-        self.codebook_size = codebook_size
         self.codebook = nn.Embedding(codebook_size, codebook_dim)
 
-    def forward(self, x):
-        # euclidean distance (x - e)**2 = x**2 -2xe + e**2
+    def forward(self, x: torch.Tensor):
+
+        # distances: [B, K]
         dist = (
-            x.pow(2).sum(1, keepdim=True)  # [B, 1]
-            - 2 * x @ self.codebook.weight.T  # [B, C] @ [C, Cs] -> [B, Cs]
-            + self.codebook.weight.pow(2).sum(1, keepdim=True).T  # [1, Cs]
+            x.pow(2).sum(dim=1, keepdim=True)        # [B, 1]
+            - 2.0 * (x @ self.codebook.weight.t())                      # [B, K]
+            + self.codebook.weight.pow(2).sum(dim=1, keepdim=True).t()  # [1, K]
         )
-        ids = torch.argmin(dist, dim=-1)  # [B]
-        e_k = self.codebook(ids)  # [B, C]
 
-        # straight-through estimator (see https://arxiv.org/pdf/1308.3432)
-        e_k = x + (e_k - x).detach()
+        ids = dist.argmin(dim=1)   # [B]
+        e_k = self.codebook(ids)   # [B, D]
 
-        return e_k, ids
+        # straight-through estimator
+        e_k_st = x + (e_k - x).detach()
+
+        return e_k_st, ids
 
 class LinearEncoder(nn.Module):
     def __init__(self, dims):
@@ -97,7 +103,7 @@ class LinearVQVAE(nn.Module):
         super().__init__()
         self.enc = LinearEncoder(dims)
 
-        self.vq = VectorQuantizer(codebook_size, dims[-1])
+        self.vq = LinearVectorQuantizer(codebook_size, dims[-1])
 
         dims = list(reversed(dims))  # mirror
         self.dec = LinearDecoder(dims)
@@ -115,93 +121,185 @@ class LinearVQVAE(nn.Module):
         return out, z, e_k, ids
 
 
-class Encoder(nn.Module):
-    def __init__(self, in_channels=1, hidden_dim=256, n_layers=6, verbose=False):
+
+class ConvVectorQuantizer(nn.Module):
+    def __init__(self, codebook_size: int, codebook_dim: int):
         super().__init__()
-        self.verbose = verbose
-        convs = []
-        for i in range(n_layers):
-            convs.append(
-                nn.Conv1d(
-                    in_channels if i == 0 else hidden_dim,
-                    hidden_dim,
-                    kernel_size=4,
+        self.codebook = nn.Embedding(codebook_size, codebook_dim)
+        nn.init.uniform_(self.codebook.weight, -1.0 / codebook_size, 1.0 / codebook_size)
+
+    def forward(self, z_e):  # [B, C, H, W]
+        B, C, H, W = z_e.shape
+        z_flat = z_e.permute(0, 2, 3, 1).contiguous().view(-1, C)  # [N, C]
+
+        w = self.codebook.weight  # [K, C]
+        dist = (
+            z_flat.pow(2).sum(1, keepdim=True)     # [N, 1]
+            - 2 * z_flat @ w.t()                   # [N, K]
+            + w.pow(2).sum(1).unsqueeze(0)         # [1, K]
+        )
+        ids = torch.argmin(dist, dim=1)            # [N]
+        e_k = self.codebook(ids)                   # [N, C] (grads -> codebook)
+        e_k_st = z_flat + (e_k - z_flat).detach()  # straight-through (grads -> encoder)
+
+        e_k = e_k.view(B, H, W, C).permute(0, 3, 1, 2).contiguous()
+        e_k_st = e_k_st.view(B, H, W, C).permute(0, 3, 1, 2).contiguous()
+        ids = ids.view(B, H, W)
+
+        return e_k, e_k_st, ids
+    
+
+
+class ConvEncoder(nn.Module):
+    def __init__(self, dims: List[int], n_res: int = 2):
+        super().__init__()
+        assert len(dims) >= 2, "dims must be like [in_dim, ..., latent_dim]"
+        self.dims = dims
+
+        layers = []
+        for in_d, out_d in zip(dims[:-1], dims[1:]):
+            layers.append(
+                nn.Conv2d(
+                    in_channels=in_d,
+                    out_channels=out_d,
+                    kernel_size=3,
                     stride=2,
                     padding=1,
+                    bias=False,
                 )
             )
-        self.convs = nn.ModuleList(convs)
+        
+        self.layers = nn.ModuleList(layers)
 
     def forward(self, x):
-        # x: [B, C, T]
-        if self.verbose:
-            print(f"Input: {x.shape}")
-            print("Encoder")
-        for i, conv in enumerate(self.convs):
+        # x: [B, C, H, W]
+
+        for i, layer in enumerate(self.layers):
+            x = layer(x)
+            if i < len(self.layers) - 1:  # no nonlinearity on code by default
+                x = torch.relu(x)
+
+        return x  # z
+
+
+class ConvDecoder(nn.Module):
+    def __init__(self, dims: List[int], n_res: int = 2):
+        super().__init__()
+        assert len(dims) >= 2
+
+        self.layers = nn.ModuleList()
+        self.bns = nn.ModuleList()
+
+        for in_d, out_d in zip(dims[:-1], dims[1:]):
+            self.layers.append(
+                nn.ConvTranspose2d(
+                    in_d,
+                    out_d,
+                    kernel_size=3,
+                    stride=2,
+                    padding=1,
+                    output_padding=1,
+                    bias=False,
+                )
+            )
+
+    def forward(self, x):
+        for i, conv in enumerate(self.layers):
             x = conv(x)
-            x = torch.relu(x)
-
-            if self.verbose:
-                print(f"After layer {i + 1}: {x.shape}")
-
+            if i < len(self.layers) - 1:
+                x = torch.relu(x)
+            else:
+                x = torch.sigmoid(x)
         return x
 
 
-class Decoder(nn.Module):
-    def __init__(self, out_channels=1, hidden_dim=256, n_layers=6, verbose=False):
+class ConvVQVAE(nn.Module):
+    """
+    Example dims: [1, 8, 16, 4]
+    """
+
+    def __init__(self, dims: List[int], codebook_size: int):
         super().__init__()
-        self.verbose = verbose
-        deconvs = []
-        for i in range(n_layers):
-            deconvs.append(
-                nn.ConvTranspose1d(
-                    hidden_dim,
-                    out_channels if i == n_layers - 1 else hidden_dim,
-                    kernel_size=4,
-                    stride=2,
-                    padding=1,
-                    output_padding=0,
-                )
-            )
-        self.deconvs = nn.ModuleList(deconvs)
+        self.enc = ConvEncoder(dims)
+
+        self.vq = ConvVectorQuantizer(codebook_size, dims[-1])
+
+        dims = list(reversed(dims))  # mirror
+        self.dec = ConvDecoder(dims)
+
+    def encode(self, x):
+        return self.enc(x)
+
+    def decode(self, z):
+        return self.dec(z)
 
     def forward(self, x):
-        if self.verbose:
-            print("Decoder")
-        for i, deconv in enumerate(self.deconvs):
-            x = deconv(x)
-            if i < len(self.deconvs) - 1:
-                x = torch.relu(x)
-                if self.verbose:
-                    print(f"After layer {i + 1}: {x.shape}")
-        if self.verbose:
-            print(f"Output: {x.shape}")
+        z = self.encode(x)
+        e_k, e_k_st, ids = self.vq(z)
+        out = self.decode(e_k_st)
+        return out, z, e_k, ids
+
+
+
+
+class ResBlock(nn.Module):
+    def __init__(self, channels: int):
+        super().__init__()
+        self.conv3 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size=1)
+
+    def forward(self, x):
+        h = torch.relu(x)
+        h = self.conv3(h)
+        h = torch.relu(h)
+        h = self.conv1(h)
+        return x + h
+
+
+class Encoder(nn.Module):
+    def __init__(self, in_ch=3, hidden=256, n_res=2, z_ch=3):
+        super().__init__()
+
+        self.c1 = nn.Conv2d(in_ch, hidden, kernel_size=4, stride=2, padding=1)
+        self.c2 = nn.Conv2d(hidden, hidden, kernel_size=4, stride=2, padding=1)
+        self.res = nn.Sequential(*[ResBlock(hidden) for _ in range(n_res)])
+        self.to_z = nn.Conv2d(hidden, z_ch, kernel_size=1)
+
+    def forward(self, x):
+        x = torch.relu(self.c1(x))
+        x = torch.relu(self.c2(x))
+        x = self.res(x)
+        z_e = self.to_z(x)           # [B, 1, 32, 32]
+        return z_e
+
+
+
+class Decoder(nn.Module):
+    def __init__(self, out_ch=3, hidden=256, z_ch=1):
+        super().__init__()
+        # lift 1 channel latent to hidden feature maps
+        self.from_z = nn.Conv2d(z_ch, hidden, kernel_size=1)
+
+        self.t1 = nn.ConvTranspose2d(hidden, hidden, kernel_size=4, stride=2, padding=1)
+        self.t2 = nn.ConvTranspose2d(hidden, out_ch, kernel_size=4, stride=2, padding=1)
+
+    def forward(self, z_q):
+        x = torch.relu(self.from_z(z_q))
+        x = torch.relu(self.t1(x))
+        x = torch.sigmoid(self.t2(x))  # assume inputs in [0,1]
         return x
 
 
 class VQVAE(nn.Module):
-    def __init__(self, hidden_dim=2, n_layers=6, codebook_size=512, verbose=False):
+
+    def __init__(self, codebook_size=512, hidden=256, n_res=2, z_ch=1):
         super().__init__()
-
-        self.hidden_dim = hidden_dim
-
-        self.enc = Encoder(
-            in_channels=1, hidden_dim=hidden_dim, n_layers=n_layers, verbose=verbose
-        )
-        self.vq = VectorQuantizer(codebook_size=codebook_size, codebook_dim=hidden_dim)
-        self.dec = Decoder(
-            out_channels=1, hidden_dim=hidden_dim, n_layers=n_layers, verbose=verbose
-        )
+        self.enc = Encoder(in_ch=3, hidden=hidden, n_res=n_res, z_ch=z_ch)
+        self.vq = ConvVectorQuantizer(codebook_size=codebook_size, codebook_dim=z_ch)
+        self.dec = Decoder(out_ch=3, hidden=hidden, z_ch=z_ch)
 
     def forward(self, x):
-        batch_size, _, _ = x.shape  # [B, D, T]
-
-        z_e = self.enc(x)  # [B, D, T_e]
-        z_e = z_e.permute(0, 2, 1).reshape(
-            -1, self.hidden_dim
-        )  # [B, T_e, D] -> [B*T_e, D]
-        e_k, ids = self.vq(z_e)
-        e_k = e_k.view(batch_size, -1, self.hidden_dim).permute(0, 2, 1)  # [B, D, T_e]
-        y = self.dec(e_k)  # [B, D, T]
-
-        return y, z_e, ids
+        z_e = self.enc(x)                 # [B, 1, 32, 32]
+        e_k, e_k_st, ids = self.vq(z_e)   # both are [B, 1, 32, 32]
+        out = self.dec(e_k_st)            # [B, 3, 128, 128]
+        return out, z_e, e_k, ids
