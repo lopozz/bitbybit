@@ -269,7 +269,7 @@ class Encoder(nn.Module):
         x = torch.relu(self.c1(x))
         x = torch.relu(self.c2(x))
         x = self.res(x)
-        z_e = self.to_z(x)           # [B, 1, 32, 32]
+        z_e = self.to_z(x)
         return z_e
 
 
@@ -299,7 +299,7 @@ class VQVAE(nn.Module):
         self.dec = Decoder(out_ch=3, hidden=hidden, z_ch=z_ch)
 
     def forward(self, x):
-        z_e = self.enc(x)                 # [B, 1, 32, 32]
-        e_k, e_k_st, ids = self.vq(z_e)   # both are [B, 1, 32, 32]
-        out = self.dec(e_k_st)            # [B, 3, 128, 128]
+        z_e = self.enc(x)
+        e_k, e_k_st, ids = self.vq(z_e)
+        out = self.dec(e_k_st)
         return out, z_e, e_k, ids
