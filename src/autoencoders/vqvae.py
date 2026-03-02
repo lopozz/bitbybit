@@ -23,7 +23,7 @@ import torch
 import torch.nn as nn
 
 from typing import List
-    
+
 
 class LinearVectorQuantizer(nn.Module):
     """
@@ -32,26 +32,27 @@ class LinearVectorQuantizer(nn.Module):
       e_k: [B, D] (quantized, straight-through)
       ids: [B] (code index per item)
     """
+
     def __init__(self, codebook_size: int, codebook_dim: int):
         super().__init__()
         self.codebook = nn.Embedding(codebook_size, codebook_dim)
 
     def forward(self, x: torch.Tensor):
-
         # distances: [B, K]
         dist = (
-            x.pow(2).sum(dim=1, keepdim=True)        # [B, 1]
-            - 2.0 * (x @ self.codebook.weight.t())                      # [B, K]
+            x.pow(2).sum(dim=1, keepdim=True)  # [B, 1]
+            - 2.0 * (x @ self.codebook.weight.t())  # [B, K]
             + self.codebook.weight.pow(2).sum(dim=1, keepdim=True).t()  # [1, K]
         )
 
-        ids = dist.argmin(dim=1)   # [B]
-        e_k = self.codebook(ids)   # [B, D]
+        ids = dist.argmin(dim=1)  # [B]
+        e_k = self.codebook(ids)  # [B, D]
 
         # straight-through estimator
         e_k_st = x + (e_k - x).detach()
 
         return e_k_st, ids
+
 
 class LinearEncoder(nn.Module):
     def __init__(self, dims):
@@ -121,12 +122,13 @@ class LinearVQVAE(nn.Module):
         return out, z, e_k, ids
 
 
-
 class ConvVectorQuantizer(nn.Module):
     def __init__(self, codebook_size: int, codebook_dim: int):
         super().__init__()
         self.codebook = nn.Embedding(codebook_size, codebook_dim)
-        nn.init.uniform_(self.codebook.weight, -1.0 / codebook_size, 1.0 / codebook_size)
+        nn.init.uniform_(
+            self.codebook.weight, -1.0 / codebook_size, 1.0 / codebook_size
+        )
 
     def forward(self, z_e):  # [B, C, H, W]
         B, C, H, W = z_e.shape
@@ -134,12 +136,12 @@ class ConvVectorQuantizer(nn.Module):
 
         w = self.codebook.weight  # [K, C]
         dist = (
-            z_flat.pow(2).sum(1, keepdim=True)     # [N, 1]
-            - 2 * z_flat @ w.t()                   # [N, K]
-            + w.pow(2).sum(1).unsqueeze(0)         # [1, K]
+            z_flat.pow(2).sum(1, keepdim=True)  # [N, 1]
+            - 2 * z_flat @ w.t()  # [N, K]
+            + w.pow(2).sum(1).unsqueeze(0)  # [1, K]
         )
-        ids = torch.argmin(dist, dim=1)            # [N]
-        e_k = self.codebook(ids)                   # [N, C] (grads -> codebook)
+        ids = torch.argmin(dist, dim=1)  # [N]
+        e_k = self.codebook(ids)  # [N, C] (grads -> codebook)
         e_k_st = z_flat + (e_k - z_flat).detach()  # straight-through (grads -> encoder)
 
         e_k = e_k.view(B, H, W, C).permute(0, 3, 1, 2).contiguous()
@@ -147,7 +149,6 @@ class ConvVectorQuantizer(nn.Module):
         ids = ids.view(B, H, W)
 
         return e_k, e_k_st, ids
-    
 
 
 class ConvEncoder(nn.Module):
@@ -168,7 +169,7 @@ class ConvEncoder(nn.Module):
                     bias=False,
                 )
             )
-        
+
         self.layers = nn.ModuleList(layers)
 
     def forward(self, x):
@@ -240,8 +241,6 @@ class ConvVQVAE(nn.Module):
         return out, z, e_k, ids
 
 
-
-
 class ResBlock(nn.Module):
     def __init__(self, channels: int):
         super().__init__()
@@ -273,7 +272,6 @@ class Encoder(nn.Module):
         return z_e
 
 
-
 class Decoder(nn.Module):
     def __init__(self, out_ch=3, hidden=256, z_ch=1):
         super().__init__()
@@ -291,7 +289,6 @@ class Decoder(nn.Module):
 
 
 class VQVAE(nn.Module):
-
     def __init__(self, codebook_size=512, hidden=256, n_res=2, z_ch=1):
         super().__init__()
         self.enc = Encoder(in_ch=3, hidden=hidden, n_res=n_res, z_ch=z_ch)
